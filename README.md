@@ -1,4 +1,4 @@
-# JGBEmu (Jank Gameboy Emulator)\
+# JGBEmu (Jank Gameboy Emulator)
 
 ## Sources:
 

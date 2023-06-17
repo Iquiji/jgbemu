@@ -1,17 +1,57 @@
 
+/// Register or Indirect Memory access
+#[derive(Debug, Clone)]
+pub enum Location8Bit{
+    A, B, C, D, E, H, L, Indirect
+}
+
+// 16 Bit Registers
+#[derive(Debug, Clone)]
+pub enum Location16Bit{
+    AF, BC, DE, HL, SP
+}
+
 #[derive(Debug, Clone)]
 pub enum Instruction{
-    
+    Mem(MemoryInstruction),
     NOP,
     Unknown,
 }
 
+/// Includes Load and Store and general Memory moving instructions
+#[derive(Debug, Clone)]
+pub enum MemoryInstruction{
+    LoadImmediate8(Location8Bit, u8),
+    LoadImmediate16(Location16Bit, u16),
+    /// See LoadInstruction::LoadIndirectFromA
+    LoadIndirectToA(Location16Bit, bool, bool),
+    /// LD (BC), A --- LD (HL+), A
+    /// Location, Increment?, Decrement? 
+    LoadIndirectFromA(Location16Bit, bool, bool),
+    /// Dest, Src
+    Load(Location8Bit, Location8Bit),
+    /// read from io-port n (memory FF00+n)
+    LoadPortN(u8),
+    /// write to io-port n (memory FF00+n)
+    StorePortN(u8),
+    LoadPortC,
+    StorePortC,
+    Push(Location16Bit),
+    Pop(Location16Bit),
+}
+
+#[derive(Debug, Clone)]
+pub enum ParseInstructionResult{
+    NeedMoreBytes,
+    Instruction(Instruction)
+}
+
 impl Instruction{
     /// Returns Instruction or needs more Bytes :)
-    pub fn parse_from_bytes(bytes: &[u8]) -> Result<Instruction, ()>{
+    pub fn parse_from_bytes(bytes: &[u8]) -> ParseInstructionResult{ 
         // Prefixes:
         if [0xCB, 0xDD, 0xED, 0xFD].contains(bytes.last().unwrap()) {
-            return Err(())
+            return ParseInstructionResult::NeedMoreBytes; 
         }
 
         /*
@@ -34,6 +74,6 @@ impl Instruction{
         println!("x: {x}, y: {y}, z: {z}, p: {p}, q: {q}");
 
 
-        Ok(Instruction::Unknown)
+        ParseInstructionResult::Instruction(Instruction::Unknown)
     }
 }

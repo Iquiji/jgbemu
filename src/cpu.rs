@@ -17,7 +17,6 @@ pub const BOOT_ROM_GB: [u8; 256] = [
     0xf5, 0x06, 0x19, 0x78, 0x86, 0x23, 0x05, 0x20, 0xfb, 0x86, 0x20, 0xfe, 0x3e, 0x01, 0xe0, 0x50,
 ];
 
-
 /*
 Memory Map:
 0000 - 3FFF	16 KiB ROM bank 00 From cartridge, usually a fixed bank
@@ -128,10 +127,10 @@ impl Registers {
         self.status = val;
     }
     pub fn set_status_zero(&mut self, set_bit: bool) {
-        self.status &= if set_bit { 0b1000_0000 } else {0};
+        self.status &= if set_bit { 0b1000_0000 } else { 0 };
     }
     pub fn set_status_carry(&mut self, set_bit: bool) {
-        self.status &= if set_bit { 0b0001_0000 } else {0};
+        self.status &= if set_bit { 0b0001_0000 } else { 0 };
     }
     pub fn set_reg_a(&mut self, val: u8) {
         self.reg_a = val;

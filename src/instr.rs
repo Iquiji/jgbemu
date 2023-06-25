@@ -251,30 +251,30 @@ impl Instruction {
 
                 match (x, z, y) {
                     (0, 0, 0) => {
-                        return PRes::Instruction(Instruction {
+                        PRes::Instruction(Instruction {
                             cycles: 4,
                             itype: InstructionType::Control(ControlInstruction::NOP),
                         })
                     }
-                    (0, 0, 1) => return PRes::NeedMoreBytesSpecific(2),
+                    (0, 0, 1) => PRes::NeedMoreBytesSpecific(2),
                     (0, 0, 2) => {
-                        return PRes::Instruction(Instruction {
+                        PRes::Instruction(Instruction {
                             cycles: 255,
                             itype: InstructionType::Control(ControlInstruction::STOP),
                         })
                     }
-                    (0, 0, 3) => return PRes::NeedMoreBytesSpecific(1),
-                    (0, 0, _) => return PRes::NeedMoreBytesSpecific(1),
+                    (0, 0, 3) => PRes::NeedMoreBytesSpecific(1),
+                    (0, 0, _) => PRes::NeedMoreBytesSpecific(1),
                     (0, 1, _) => {
                         if q == 0 {
-                            return PRes::NeedMoreBytesSpecific(2);
+                            PRes::NeedMoreBytesSpecific(2)
                         } else {
-                            return PRes::Instruction(Instruction {
+                            PRes::Instruction(Instruction {
                                 cycles: 8,
                                 itype: InstructionType::Arithmetic(ArithmeticInstruction::ADDHL16(
                                     RP_TABLE[p as usize],
                                 )),
-                            });
+                            })
                         }
                     }
                     (0, 2, _) => {
@@ -347,23 +347,23 @@ impl Instruction {
 
                         let idx = q << 2 | p;
 
-                        return PRes::Instruction(X0Z2TABLE[idx as usize].clone());
+                        PRes::Instruction(X0Z2TABLE[idx as usize].clone())
                     }
                     (0, 3, _) => {
                         if q == 0 {
-                            return PRes::Instruction(Instruction {
+                            PRes::Instruction(Instruction {
                                 cycles: 8,
                                 itype: InstructionType::Arithmetic(ArithmeticInstruction::INC16(
                                     RP_TABLE[p as usize],
                                 )),
-                            });
+                            })
                         } else {
-                            return PRes::Instruction(Instruction {
+                            PRes::Instruction(Instruction {
                                 cycles: 8,
                                 itype: InstructionType::Arithmetic(ArithmeticInstruction::DEC16(
                                     RP_TABLE[p as usize],
                                 )),
-                            });
+                            })
                         }
                     }
                     (0, 4, _) => {
@@ -373,7 +373,7 @@ impl Instruction {
                         unimplemented!();
                     }
                     (0, 6, _) => {
-                        return PRes::NeedMoreBytesSpecific(1);
+                        PRes::NeedMoreBytesSpecific(1)
                     }
                     (0, 7, _) => {
                         unimplemented!();

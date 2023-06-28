@@ -556,6 +556,7 @@ impl Instruction {
                 let z: u8 = opcode_byte & 0b0000_0111;
                 let p: u8 = y >> 1;
                 let q: u8 = y % 2;
+                // println!("decode opcode single: x: {x}, y: {y}, z: {z}, p: {p}, q: {q}");
 
                 fn parse_nn(bytes: &[u8]) -> u16 {
                     u16::from_le_bytes([bytes[1], bytes[2]])
@@ -575,6 +576,16 @@ impl Instruction {
                             cycles: 20,
                             itype: InstructionType::Mem(
                                 MemoryInstruction::LoadSPIntoConstantAddress(nn),
+                            ),
+                        })
+                    }
+                    (0, 1, _, 0, _) => {
+                        let nn = parse_nn(bytes);
+
+                        PRes::Instruction(Instruction {
+                            cycles: 20,
+                            itype: InstructionType::Mem(
+                                MemoryInstruction::LoadImmediate16(RP_TABLE[p as usize], nn)
                             ),
                         })
                     }
@@ -726,5 +737,13 @@ impl Instruction {
             }
             _ => panic!("No Clue"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test{
+    #[test]
+    fn decode_boot_rom(){
+        assert!(false)
     }
 }

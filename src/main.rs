@@ -10,7 +10,7 @@ fn main() {
     println!("Hello, world!");
     println!(
         "First Instruction: {:?}",
-        Instruction::parse_from_bytes(&BOOT_ROM_GB[0..1])
+        Instruction::parse_from_bytes(&BOOT_ROM_GB[0..=2])
     );
     println!(
         "Second Instruction: {:?}",

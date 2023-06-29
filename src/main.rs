@@ -5,7 +5,7 @@ pub mod cpu;
 pub mod instr;
 
 fn main() {
-    let mut cpu: CPU = CPU::default();
+    let _cpu: CPU = CPU::default();
 
     println!("Hello, world!");
     println!(

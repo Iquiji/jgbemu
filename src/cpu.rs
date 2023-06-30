@@ -206,6 +206,8 @@ impl Registers {
 #[derive(Debug, Clone)]
 pub struct CPU {
     pub cycle: u64,
+    pub last_tima_increment_cycle: u64,
+    pub last_div_increment_cycle: u64,
     pub reg: Registers,
     pub mem: [u8; 65536],
 }
@@ -214,6 +216,8 @@ impl CPU {
     pub fn new() -> Self {
         CPU {
             cycle: 0,
+            last_tima_increment_cycle: 0,
+            last_div_increment_cycle: 0,
             reg: Registers::default(),
             mem: [0; 65536],
         }
@@ -365,27 +369,28 @@ impl CPU {
     }
     pub fn handle_interrupts(&mut self){
         // Interrupt requested?
-        let allowed_interrupts = self.get_mem(0xFFFF) & self.get_mem(0xFFFE);
+        let allowed_interrupts = self.get_mem(0xFFFF) & self.get_mem(0xFF0F);
         if allowed_interrupts != 0{
+            println!("INTERRUPT!");
             let address = if allowed_interrupts & 0b0000_0001 > 0{
                 // VBlank - INT $40
-                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0000_0001));
+                self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0001));
                 0x40
             } else if allowed_interrupts & 0b0000_0010 > 0{
                 // LCD STAT - INT $48
-                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0000_0010));
+                self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0010));
                 0x48
             } else if allowed_interrupts & 0b0000_0100 > 0{
                 // Timer - INT $50
-                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0000_0100));
+                self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0100));
                 0x50
             } else if allowed_interrupts & 0b0000_1000 > 0{
                 // Serial - INT $58
-                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0000_1000));
+                self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_1000));
                 0x58
             } else if allowed_interrupts & 0b0001_0000 > 0{
                 // Joypad - INT $60
-                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0001_0000));
+                self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0001_0000));
                 0x60
             } else {unreachable!()};
             self.disable_all_interrupts();
@@ -404,6 +409,27 @@ impl CPU {
     }
     pub fn handle_timer(&mut self){
         // TODO:
+        let timer_modulo = self.get_mem(0xFF06);
+        let timer_control = self.get_mem(0xFF07);
+        let timer_enable_flag = timer_control & 0b0000_0100 == 1;
+        let timer_speed_select = timer_control & 0b0000_0011;
+
+        let timer_speed_divisor = [1024, 16, 64, 256][timer_speed_select as usize];
+
+        if timer_enable_flag && self.cycle - self.last_tima_increment_cycle > timer_speed_divisor{
+            let current = self.get_mem(0xFF05);
+            let new = current.wrapping_add(((self.cycle - self.last_tima_increment_cycle) / timer_speed_divisor) as u8);
+            self.set_mem(0xFF05, new);
+            if current > new{
+                self.set_mem(0xFF05, timer_modulo);
+                self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0000_0100);
+            }
+            self.last_tima_increment_cycle = self.cycle;
+        }
+        let current = self.get_mem(0xFF04);
+        let new = current.wrapping_add(((self.cycle - self.last_tima_increment_cycle) / timer_speed_divisor) as u8);
+        self.set_mem(0xFF04, new);
+        self.last_div_increment_cycle = self.cycle;
     }
 
     pub fn next_instr(&mut self) -> Instruction {
@@ -770,10 +796,9 @@ impl CPU {
                         // self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
+                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0);
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
-                        // TODO:
-                        self.reg.set_status_half_carry(false);
                     }
                 };
             }
@@ -821,7 +846,7 @@ impl CPU {
                         self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        self.reg.set_status_half_carry(((a_val as u8 & 0xf) - (other_val as u8 & 0xf) - cy as u8) & 0x10 > 0);
+                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf).wrapping_sub(cy as u8)) & 0x10 > 0);
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -909,7 +934,7 @@ impl CPU {
             }
             ArithmeticInstruction::DEC16(loc16) => {
                 let before_val = self.get_loc16(loc16);
-                let val = before_val + 1;
+                let val = before_val.wrapping_sub(1);
                 self.set_loc16(loc16, val);
             }
             ArithmeticInstruction::ADDSPRelative(d) => {
@@ -966,36 +991,59 @@ impl CPU {
         match instr {
             ShiftRotateInstruction::ShiftRotate(rotate_type, loc8) => {
                 match rotate_type {
-                    crate::instr::ShiftRotateType::RLC => todo!(),
-                    crate::instr::ShiftRotateType::RRC => todo!(),
+                    crate::instr::ShiftRotateType::RLC => {
+                        let loc_val = self.get_loc8(loc8);
+                        let res = loc_val << 1 | loc_val >> 7;
+                        self.set_loc8(loc8,res);
+
+                        self.reg.set_status_zero(res == 0);
+                        self.reg.set_status_carry(loc_val >= 0b1000_0000);
+                    },
+                    crate::instr::ShiftRotateType::RRC => {
+                        let loc_val = self.get_loc8(loc8);
+                        let res = loc_val >> 1 | loc_val << 7;
+                        self.set_loc8(loc8,res);
+
+                        self.reg.set_status_zero(res == 0);
+                        self.reg.set_status_carry(loc_val & 0x01 == 1);
+                    },
                     crate::instr::ShiftRotateType::RL => {
                         let loc_val = self.get_loc8(loc8);
                         let res =
-                            (loc_val << 1) + (if self.reg.get_status_carry() { 1 } else { 0 });
+                            (loc_val << 1) | (if self.reg.get_status_carry() { 1 } else { 0 });
                         self.set_loc8(loc8, res);
 
                         self.reg.set_status_zero(res == 0);
-                        self.reg.set_status_carry(res > loc_val);
+                        self.reg.set_status_carry(res >= 0b1000_0000);
                     }
                     crate::instr::ShiftRotateType::RR => {
                         let loc_val = self.get_loc8(loc8);
                         let res =
-                            (loc_val >> 1) + (if self.reg.get_status_carry() { 0x80 } else { 0 });
+                            (loc_val >> 1) | (if self.reg.get_status_carry() { 0x80 } else { 0 });
                         self.set_loc8(loc8, res);
 
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
                     },
-                    crate::instr::ShiftRotateType::SLA => todo!(),
-                    crate::instr::ShiftRotateType::SRA => todo!(),
-                    crate::instr::ShiftRotateType::SWAP => todo!(),
+                    crate::instr::ShiftRotateType::SLA => {
+                        todo!("SLA SRA");
+                    },
+                    crate::instr::ShiftRotateType::SRA => {
+                        todo!("SLA SRA");
+                    },
+                    crate::instr::ShiftRotateType::SWAP => {
+                        let loc_val = self.get_loc8(loc8);
+                        let res = (loc_val << 4) | (loc_val >> 4);
+
+                        self.reg.set_status_zero(res == 0);
+                        self.reg.set_status_carry(false);
+                    },
                     crate::instr::ShiftRotateType::SRL => {
                         let loc_val = self.get_loc8(loc8);
                         let res = loc_val >> 1;
                         self.set_loc8(loc8, res);
 
                         self.reg.set_status_zero(res == 0);
-                        // TODO:
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
                     },
                 }
@@ -1003,15 +1051,33 @@ impl CPU {
                 self.reg.set_status_negative(false);
                 self.reg.set_status_half_carry(false);
             }
-            ShiftRotateInstruction::RLCA => todo!(),
-            ShiftRotateInstruction::RRCA => todo!(),
+            ShiftRotateInstruction::RLCA => {
+                let loc_val = self.reg.get_reg_a();
+                let res = loc_val << 1 | loc_val >> 7;
+                self.reg.set_reg_a(res);
+
+                self.reg.set_status_zero(false);
+                self.reg.set_status_carry(loc_val >= 0b1000_0000);
+                self.reg.set_status_negative(false);
+                self.reg.set_status_half_carry(false);
+            },
+            ShiftRotateInstruction::RRCA => {
+                let loc_val = self.reg.get_reg_a();
+                let res = loc_val >> 1 | loc_val << 7;
+                self.reg.set_reg_a(res);
+
+                self.reg.set_status_zero(false);
+                self.reg.set_status_carry(loc_val & 0x01 == 1);
+                self.reg.set_status_negative(false);
+                self.reg.set_status_half_carry(false);
+            },
             ShiftRotateInstruction::RLA => {
                 let loc_val = self.reg.get_reg_a();
                 let res = (loc_val << 1) + (if self.reg.get_status_carry() { 1 } else { 0 });
                 self.reg.set_reg_a(res);
 
                 self.reg.set_status_zero(false);
-                self.reg.set_status_carry(res > loc_val);
+                self.reg.set_status_carry(loc_val >= 0b1000_0000);
                 self.reg.set_status_negative(false);
                 self.reg.set_status_half_carry(false);
             }
@@ -1034,7 +1100,7 @@ impl CPU {
                 let test = self.get_loc8(loc8) & (0x01 << n_bit);
                 // println!("test: {:?} | {:x} & {:b}", test, self.get_loc8(loc8), (0x01 << n_bit));
 
-                self.reg.set_status_zero(test > 0);
+                self.reg.set_status_zero(test == 0);
                 self.reg.set_status_negative(false);
                 self.reg.set_status_half_carry(true);
                 // println!("{:?}",self.reg.get_status_zero());

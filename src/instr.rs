@@ -767,6 +767,8 @@ impl Instruction {
                         })
                     }
                     (_, _, _, _, _) => {
+                        eprintln!("Bytes: {:?}", bytes.iter().map(|x| format!("{:02x}", x)).collect::<Vec<String>>());
+                        eprintln!("decode opcode single: x: {x}, y: {y}, z: {z}, p: {p}, q: {q}");
                         panic!("This Should be unreachable, Instruction decode, further bytes")
                     }
                 }

@@ -8,11 +8,19 @@ pub mod cpu;
 pub mod instr;
 
 fn main() {
-    let rom_num = 2;
+    let rom_num = 9;
     let test_rom_paths = vec![
         "./blargg/cpu_instrs/individual/01-special.gb",
         "./blargg/cpu_instrs/individual/02-interrupts.gb",
         "./blargg/cpu_instrs/individual/03-op sp,hl.gb",
+        "./blargg/cpu_instrs/individual/04-op r,imm.gb",
+        "./blargg/cpu_instrs/individual/05-op rp.gb",
+        "./blargg/cpu_instrs/individual/06-ld r,r.gb",
+        "./blargg/cpu_instrs/individual/07-jr,jp,call,ret,rst.gb",
+        "./blargg/cpu_instrs/individual/08-misc instrs.gb",
+        "./blargg/cpu_instrs/individual/09-op r,r.gb",
+        "./blargg/cpu_instrs/individual/10-bit ops.gb",
+        "./blargg/cpu_instrs/individual/11-op a,(hl).gb",
     ];
 
     let mut cpu: CPU = CPU::new();
@@ -34,18 +42,26 @@ fn main() {
     writeln!(output, "{}", cpu.print_status()).unwrap();
     let mut current_word = String::new();
     let mut last_mem = 0;
-    for _ in 0..128000000 {
+    for _ in 0.. {
         let next_instr: Instruction = cpu.next_instr();
-        cpu.execute_instr(next_instr);
+        cpu.handle_timer();
         cpu.handle_interrupts();
+        cpu.execute_instr(next_instr);
         writeln!(output, "{}", cpu.print_status()).unwrap();
+
+        // if cpu.get_mem(0xFFFF) != 0{
+        //     println!("IE: {:08b}", cpu.get_mem(0xFFFF));
+        // }
+        // if cpu.get_mem(0xFF0F) != 0{
+        //     println!("IF: {:08b}", cpu.get_mem(0xFF0F));
+        // }
 
         if cpu.get_mem(0xFF01) != last_mem{
             println!("'{}' -{:02x} {:08b}",cpu.get_mem(0xFF01) as char, cpu.get_mem(0xFF01),cpu.get_mem(0xFF02));
             last_mem = cpu.get_mem(0xFF01);
             current_word.push(cpu.get_mem(0xFF01) as char);
         }
-        if current_word.contains("Failed"){
+        if current_word.contains("Failed") && current_word.contains("#") && current_word.chars().last().unwrap().is_ascii_alphanumeric(){
             break;
         }
     }

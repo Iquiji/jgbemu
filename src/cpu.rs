@@ -237,12 +237,21 @@ impl CPU {
         let mut buf: Vec<u8> = vec![];
         let _num_bytes = f.read_to_end(&mut buf).unwrap();
         // eprintln!("{:?}", num_bytes);
-        for (idx, byte) in buf.iter().enumerate() {
+        for (idx, byte) in buf.iter().enumerate().skip(100) {
             self.mem[idx] = *byte;
         }
     }
-    pub fn unload_boot_rom(&mut self) {
-        todo!()
+    pub fn unload_boot_rom(&mut self, path: &str) {
+        let mut f = File::open(path).unwrap();
+        let mut buf: Vec<u8> = vec![];
+        let _num_bytes = f.read_to_end(&mut buf).unwrap();
+        // eprintln!("{:?}", num_bytes);
+        for (idx, byte) in buf.iter().enumerate() {
+            self.mem[idx] = *byte;
+            if idx > 100{
+                break;
+            }
+        }
     }
     pub fn run_till_0x100(&mut self) {
         while self.reg.get_pc() != 0x100 {
@@ -352,10 +361,50 @@ impl CPU {
         self.set_mem(0xFFFF, 0x00);
     }
     pub fn enable_all_interrupts(&mut self){
-        self.set_mem(0xFFFF, 0xFF);
+        self.set_mem(0xFFFF, 0x1F);
     }
-    // pub fn get_interupt_re
+    pub fn handle_interrupts(&mut self){
+        // Interrupt requested?
+        let allowed_interrupts = self.get_mem(0xFFFF) & self.get_mem(0xFFFE);
+        if allowed_interrupts != 0{
+            let address = if allowed_interrupts & 0b0000_0001 > 0{
+                // VBlank - INT $40
+                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0000_0001));
+                0x40
+            } else if allowed_interrupts & 0b0000_0010 > 0{
+                // LCD STAT - INT $48
+                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0000_0010));
+                0x48
+            } else if allowed_interrupts & 0b0000_0100 > 0{
+                // Timer - INT $50
+                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0000_0100));
+                0x50
+            } else if allowed_interrupts & 0b0000_1000 > 0{
+                // Serial - INT $58
+                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0000_1000));
+                0x58
+            } else if allowed_interrupts & 0b0001_0000 > 0{
+                // Joypad - INT $60
+                self.set_mem(0xFFFE, self.get_mem(0xFFFE) & (0xFF ^ 0b0001_0000));
+                0x60
+            } else {unreachable!()};
+            self.disable_all_interrupts();
 
+            self.reg
+                    .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);
+            let [lower_byte, upper_byte] = self.reg.get_pc().to_le_bytes();
+            self.set_mem(self.reg.get_stack_pointer(), lower_byte);
+            self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
+
+            println!("INTERRUPT {:X} -- BACK ADDR: {:x} {:x}", address, self.get_mem(self.reg.get_stack_pointer()), self.get_mem(self.reg.get_stack_pointer() + 1));
+
+            self.reg.set_pc(address);
+            self.cycle += 5 * 4;
+        }
+    }
+    pub fn handle_timer(&mut self){
+        // TODO:
+    }
 
     pub fn next_instr(&mut self) -> Instruction {
         match Instruction::parse_from_bytes(
@@ -429,6 +478,8 @@ impl CPU {
             }
             crate::instr::InstructionType::Unknown => panic!(),
         }
+
+        self.cycle += instr.cycles as u64;
     }
     pub fn execute_mem_instr(&mut self, cycles: u8, instr: MemoryInstruction) {
         match instr {
@@ -618,7 +669,15 @@ impl CPU {
                 self.set_mem(nn, self.reg.get_reg_l());
                 self.set_mem(nn + 1, self.reg.get_reg_h());
             }
-            MemoryInstruction::LoadHLFromSPOffset(_) => todo!(),
+            MemoryInstruction::LoadHLFromSPOffset(offset) => {
+                let res = self.reg.get_stack_pointer() as i32 + offset as i32;
+                self.reg.set_reg_hl(res as u16);
+
+                self.reg.set_status_zero(false);
+                self.reg.set_status_negative(false);
+                self.reg.set_status_half_carry((self.reg.get_stack_pointer() & 0x000f).wrapping_add(offset as u8 as u16) & 0x10 > 0);
+                self.reg.set_status_carry((self.reg.get_stack_pointer() & 0x00Ff).wrapping_add(offset as u8 as u16) & 0x100 > 0);
+            },
             MemoryInstruction::LoadIndirectConstantToA(nn) => self.reg.set_reg_a(self.get_mem(nn)),
             MemoryInstruction::LoadIndirectConstantFromA(nn) => {
                 self.set_mem(nn, self.reg.get_reg_a())

@@ -8,6 +8,7 @@ pub mod cpu;
 pub mod instr;
 
 fn main() {
+    let rom_num = 2;
     let test_rom_paths = vec![
         "./blargg/cpu_instrs/individual/01-special.gb",
         "./blargg/cpu_instrs/individual/02-interrupts.gb",
@@ -15,9 +16,10 @@ fn main() {
     ];
 
     let mut cpu: CPU = CPU::new();
-    cpu.load_blargg_test_rom("./blargg/cpu_instrs/individual/01-special.gb");
+    cpu.load_blargg_test_rom(test_rom_paths[rom_num -1]);
     cpu.load_boot_rom();
     cpu.run_till_0x100();
+    cpu.unload_boot_rom(test_rom_paths[rom_num -1]);
 
     println!("{}", cpu.print_status());
     println!(
@@ -28,16 +30,23 @@ fn main() {
         cpu.reg.get_status_carry()
     );
 
-    let mut output = File::create("blargg_1.log").unwrap();
+    let mut output = File::create(format!("blargg_{}.log", rom_num)).unwrap();
     writeln!(output, "{}", cpu.print_status()).unwrap();
+    let mut current_word = String::new();
     let mut last_mem = 0;
     for _ in 0..128000000 {
         let next_instr: Instruction = cpu.next_instr();
         cpu.execute_instr(next_instr);
+        cpu.handle_interrupts();
         writeln!(output, "{}", cpu.print_status()).unwrap();
+
         if cpu.get_mem(0xFF01) != last_mem{
             println!("'{}' -{:02x} {:08b}",cpu.get_mem(0xFF01) as char, cpu.get_mem(0xFF01),cpu.get_mem(0xFF02));
             last_mem = cpu.get_mem(0xFF01);
+            current_word.push(cpu.get_mem(0xFF01) as char);
+        }
+        if current_word.contains("Failed"){
+            break;
         }
     }
 }

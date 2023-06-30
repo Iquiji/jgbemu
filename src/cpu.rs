@@ -190,6 +190,7 @@ impl Registers {
     }
     pub fn set_reg_af(&mut self, val: u16) {
         [self.status, self.reg_a] = val.to_le_bytes();
+        self.status &= 0xF0;
     }
     pub fn set_reg_bc(&mut self, val: u16) {
         [self.reg_c, self.reg_b] = val.to_le_bytes();
@@ -242,6 +243,39 @@ impl CPU {
     }
     pub fn unload_boot_rom(&mut self) {
         todo!()
+    }
+    pub fn run_till_0x100(&mut self) {
+        while self.reg.get_pc() != 0x100 {
+            let next_instr: Instruction = self.next_instr();
+            self.execute_instr(next_instr);
+        }
+        assert_eq!(
+            self.reg.get_reg_a(), 0x01
+        );
+        assert_eq!(
+            self.reg.get_reg_b(), 0x00
+        );
+        assert_eq!(
+            self.reg.get_reg_c(), 0x13
+        );
+        assert_eq!(
+            self.reg.get_reg_d(), 0x00
+        );
+        assert_eq!(
+            self.reg.get_reg_e(), 0xd8
+        );
+        assert_eq!(
+            self.reg.get_reg_h(), 0x01
+        );
+        assert_eq!(
+            self.reg.get_reg_l(), 0x4d
+        );
+        assert_eq!(
+            self.reg.get_status_zero(), true
+        );
+        assert_eq!(
+            self.reg.get_status_negative(), false
+        );
     }
     pub fn get_mem(&self, addr: u16) -> u8 {
         // TODO: hack for no lcd
@@ -313,6 +347,15 @@ impl CPU {
             self.get_mem(self.reg.get_pc() + 3),
         )
     }
+
+    pub fn disable_all_interrupts(&mut self){
+        self.set_mem(0xFFFF, 0x00);
+    }
+    pub fn enable_all_interrupts(&mut self){
+        self.set_mem(0xFFFF, 0xFF);
+    }
+    // pub fn get_interupt_re
+
 
     pub fn next_instr(&mut self) -> Instruction {
         match Instruction::parse_from_bytes(
@@ -594,7 +637,7 @@ impl CPU {
                         let res = a_val + other_val;
                         self.reg.set_reg_a(res as u8);
 
-                        self.reg.set_status_carry(res > 0xFFFF);
+                        self.reg.set_status_carry(res > 0xFF);
                         self.reg.set_status_half_carry(
                             ((a_val as u8 & 0xf) + (other_val as u8 & 0xf)) & 0x10 > 0,
                         );
@@ -605,7 +648,7 @@ impl CPU {
                         let res = a_val + other_val + cy;
                         self.reg.set_reg_a(res as u8);
 
-                        self.reg.set_status_carry(res > 0xFFFF);
+                        self.reg.set_status_carry(res > 0xFF);
                         self.reg.set_status_half_carry(
                             ((a_val as u8 & 0xf) + (other_val as u8 & 0xf) + cy as u8) & 0x10 > 0,
                         );
@@ -617,8 +660,7 @@ impl CPU {
                         self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        // TODO:
-                        self.reg.set_status_half_carry(false);
+                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0);
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -627,8 +669,7 @@ impl CPU {
                         self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        // TODO:
-                        self.reg.set_status_half_carry(false);
+                        self.reg.set_status_half_carry(((a_val as u8 & 0xf) - (other_val as u8 & 0xf) - cy as u8) & 0x10 > 0);
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -687,7 +728,7 @@ impl CPU {
                         let res = a_val + other_val;
                         self.reg.set_reg_a(res as u8);
 
-                        self.reg.set_status_carry(res > 0xFFFF);
+                        self.reg.set_status_carry(res > 0xFF);
                         self.reg.set_status_half_carry(
                             ((a_val as u8 & 0xf) + (other_val as u8 & 0xf)) & 0x10 > 0,
                         );
@@ -698,7 +739,7 @@ impl CPU {
                         let res = a_val + other_val + cy;
                         self.reg.set_reg_a(res as u8);
 
-                        self.reg.set_status_carry(res > 0xFFFF);
+                        self.reg.set_status_carry(res > 0xFF);
                         self.reg.set_status_half_carry(
                             ((a_val as u8 & 0xf) + (other_val as u8 & 0xf) + cy as u8) & 0x10 > 0,
                         );
@@ -706,12 +747,13 @@ impl CPU {
                         self.reg.set_status_negative(false);
                     }
                     crate::instr::ALUOpTypes::SUB => {
-                        let res = a_val - other_val;
+                        let a_val = self.reg.get_reg_a();
+                        let other_val = other_constant;
+                        let res = a_val.wrapping_sub(other_val);
                         self.reg.set_reg_a(res as u8);
 
-                        self.reg.set_status_carry(res < 0);
-                        // TODO:
-                        self.reg.set_status_half_carry(false);
+                        self.reg.set_status_carry(res > a_val);
+                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0);
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -720,8 +762,7 @@ impl CPU {
                         self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        // TODO:
-                        self.reg.set_status_half_carry(false);
+                        self.reg.set_status_half_carry(((a_val as u8 & 0xf) - (other_val as u8 & 0xf) - cy as u8) & 0x10 > 0);
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -758,8 +799,7 @@ impl CPU {
                         // self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        // TODO:
-                        self.reg.set_status_half_carry(false);
+                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0);
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -781,18 +821,27 @@ impl CPU {
                 self.set_loc8(loc8, val);
 
                 // TODO?
+                // if self.reg.get_pc() > 0x200{
+                //     println!("{:X} - DEC8 {:08b} -- {:?}",self.reg.get_pc(), before_val,(before_val as u8 & 0xf).wrapping_sub(1_u8) & 0x10 > 0);
+                // }
                 self.reg.set_status_half_carry(
-                    (before_val as u8 & 0xf).wrapping_sub((1_u8 & 0xf) & 0x10) > 0,
+                    (before_val as u8 & 0xf).wrapping_sub(1_u8) & 0x10 > 0,
                 );
                 self.reg.set_status_zero(val == 0);
                 self.reg.set_status_negative(true);
             }
             ArithmeticInstruction::ADDHL16(loc16) => {
-                let val = self.reg.get_reg_hl() + self.get_loc16(loc16);
+                let before_val = self.reg.get_reg_hl();
+                let before_other_val = self.get_loc16(loc16);
+                let val = before_val.wrapping_add(before_other_val);
                 self.reg.set_reg_hl(val);
 
+                self.reg.set_status_negative(false);
+                self.reg.set_status_carry(val < before_val);
                 // TODO
-                self.reg.set_status_negative(true);
+                self.reg.set_status_half_carry(
+                    (before_val & 0x0FFF).wrapping_add(before_other_val & 0x0FFF) & 0x1000 > 0
+                );
             }
             ArithmeticInstruction::INC16(loc16) => {
                 let before_val = self.get_loc16(loc16);
@@ -820,7 +869,32 @@ impl CPU {
                 self.reg.set_status_zero(false);
                 self.reg.set_status_negative(false);
             }
-            ArithmeticInstruction::DAA => todo!(),
+            ArithmeticInstruction::DAA => {
+                // Fix BCD after sub or add
+                let value = self.reg.get_reg_a();
+                let mut correction = 0;
+
+                if self.reg.get_status_half_carry() || (
+                    !self.reg.get_status_negative() && ((value & 0x0f) > 9)
+                ){
+                    correction |= 0x06;
+                }
+
+                if self.reg.get_status_carry() || (
+                    !self.reg.get_status_negative() && (value  > 0x99)
+                ){
+                    correction |= 0x60;
+                    self.reg.set_status_carry(true);   
+                }
+
+                let res = if self.reg.get_status_negative() {value as i32 - correction as i32} else {value as i32 + correction as i32};
+                let res_value = res as u8;
+
+                self.reg.set_status_half_carry(false);
+                self.reg.set_status_zero(res_value == 0);
+                
+                self.reg.set_reg_a(res_value);
+            },
             ArithmeticInstruction::CPL => {
                 self.reg.set_reg_a(self.reg.get_reg_a() ^ 0xFF);
 
@@ -844,11 +918,27 @@ impl CPU {
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(res > loc_val);
                     }
-                    crate::instr::ShiftRotateType::RR => todo!(),
+                    crate::instr::ShiftRotateType::RR => {
+                        let loc_val = self.get_loc8(loc8);
+                        let res =
+                            (loc_val >> 1) + (if self.reg.get_status_carry() { 0x80 } else { 0 });
+                        self.set_loc8(loc8, res);
+
+                        self.reg.set_status_zero(res == 0);
+                        self.reg.set_status_carry(loc_val & 0x01 == 1);
+                    },
                     crate::instr::ShiftRotateType::SLA => todo!(),
                     crate::instr::ShiftRotateType::SRA => todo!(),
                     crate::instr::ShiftRotateType::SWAP => todo!(),
-                    crate::instr::ShiftRotateType::SRL => todo!(),
+                    crate::instr::ShiftRotateType::SRL => {
+                        let loc_val = self.get_loc8(loc8);
+                        let res = loc_val >> 1;
+                        self.set_loc8(loc8, res);
+
+                        self.reg.set_status_zero(res == 0);
+                        // TODO:
+                        self.reg.set_status_carry(loc_val & 0x01 == 1);
+                    },
                 }
 
                 self.reg.set_status_negative(false);
@@ -861,10 +951,22 @@ impl CPU {
                 let res = (loc_val << 1) + (if self.reg.get_status_carry() { 1 } else { 0 });
                 self.reg.set_reg_a(res);
 
-                self.reg.set_status_zero(res == 0);
+                self.reg.set_status_zero(false);
                 self.reg.set_status_carry(res > loc_val);
+                self.reg.set_status_negative(false);
+                self.reg.set_status_half_carry(false);
             }
-            ShiftRotateInstruction::RRA => todo!(),
+            ShiftRotateInstruction::RRA => {
+                let loc_val = self.reg.get_reg_a();
+                let res =
+                    (loc_val >> 1) + (if self.reg.get_status_carry() { 0x80 } else { 0 });
+                self.reg.set_reg_a(res);
+
+                self.reg.set_status_zero(false);
+                self.reg.set_status_carry(loc_val & 0x01 == 1);
+                self.reg.set_status_negative(false);
+                self.reg.set_status_half_carry(false);
+            },
         }
     }
     fn execute_single_bit_instr(&mut self, cycles: u8, instr: SingleBitInstruction) {
@@ -903,8 +1005,8 @@ impl CPU {
             ControlInstruction::NOP => {}
             ControlInstruction::HALT => todo!("HALT"),
             ControlInstruction::STOP => todo!("STOP"),
-            ControlInstruction::DI => todo!(),
-            ControlInstruction::EI => todo!(),
+            ControlInstruction::DI => self.disable_all_interrupts(),
+            ControlInstruction::EI => self.enable_all_interrupts(),
         }
     }
     fn execute_jump_instr(&mut self, cycles: u8, instr: JumpInstruction) {

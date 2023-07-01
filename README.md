@@ -24,7 +24,7 @@ Boot ROM dissasembly:
 
 [ ] 02 - interrupts (Timing of Instructions not accurate, EI not working)
 
-[ ] 03 - op sp, hl 
+[x] 03 - op sp, hl 
 
 [x] 04 - op r,imm
 
@@ -32,12 +32,12 @@ Boot ROM dissasembly:
 
 [x] 06 - ld r,r
 
-[ ] 07 - jr, jp, call, ret, rst (jump location wrong, maybe lsb and msb switched up)
+[x] 07 - jr, jp, call, ret, rst (jump location wrong, maybe lsb and msb switched up)
 
-[ ] 08 - misc instrs
+[x] 08 - misc instrs
 
-[ ] 09 - op r,r
+[x] 09 - op r,r
 
 [x] 10 - bit ops
 
-[ ] 11 - op a,(hl)
+[x] 11 - op a,(hl)

@@ -208,6 +208,7 @@ pub struct CPU {
     pub cycle: u64,
     pub last_tima_increment_cycle: u64,
     pub last_div_increment_cycle: u64,
+    pub enable_interrupt_req: bool,
     pub reg: Registers,
     pub mem: [u8; 65536],
 }
@@ -218,6 +219,7 @@ impl CPU {
             cycle: 0,
             last_tima_increment_cycle: 0,
             last_div_increment_cycle: 0,
+            enable_interrupt_req: false,
             reg: Registers::default(),
             mem: [0; 65536],
         }
@@ -251,7 +253,9 @@ impl CPU {
         let _num_bytes = f.read_to_end(&mut buf).unwrap();
         // eprintln!("{:?}", num_bytes);
         for (idx, byte) in buf.iter().enumerate() {
-            self.mem[idx] = *byte;
+            if *byte != 0{
+                self.mem[idx] = *byte;
+            }
             if idx > 100{
                 break;
             }
@@ -298,6 +302,15 @@ impl CPU {
         self.mem[addr as usize]
     }
     pub fn set_mem(&mut self, addr: u16, byte: u8) {
+        // if addr > 0xDD00 && addr < 0xDD05{
+        //     println!("[{:04x}] = {:02x}", addr, byte);
+        // }
+        // if 0xdd04 >= addr && addr >= 0xdd00{
+        //     println!("!!!! {:#04x}={:02x}", addr, byte);
+        // }
+        // if addr == 0xdd02{
+        //     println!("!!!! 0xdd02={:02x}", byte);
+        // }
         self.mem[addr as usize] = byte;
     }
     pub fn get_loc8(&self, loc: Location8Bit) -> u8 {
@@ -365,7 +378,14 @@ impl CPU {
         self.set_mem(0xFFFF, 0x00);
     }
     pub fn enable_all_interrupts(&mut self){
-        self.set_mem(0xFFFF, 0x1F);
+        self.enable_interrupt_req = true;
+        
+    }
+    pub fn do_enable_interrupts_on_req(&mut self){
+        if self.enable_interrupt_req{
+            self.set_mem(0xFFFF, 0x1F);
+            self.enable_interrupt_req = false;
+        }
     }
     pub fn handle_interrupts(&mut self){
         // Interrupt requested?
@@ -505,7 +525,12 @@ impl CPU {
             crate::instr::InstructionType::Unknown => panic!(),
         }
 
-        self.cycle += instr.cycles as u64;
+        if instr.cycles == 64{
+            // We do this in the conditional
+        } else{
+            self.cycle += instr.cycles as u64;
+        }
+
     }
     pub fn execute_mem_instr(&mut self, cycles: u8, instr: MemoryInstruction) {
         match instr {
@@ -672,8 +697,8 @@ impl CPU {
                     crate::instr::Location16Bit::HL => self.reg.get_reg_hl().to_le_bytes(),
                     crate::instr::Location16Bit::SP => self.reg.get_stack_pointer().to_le_bytes(),
                 };
-                self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
                 self.set_mem(self.reg.get_stack_pointer(), lower_byte);
+                self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
             }
             MemoryInstruction::Pop(location16) => {
                 let [lower_byte, upper_byte] = [
@@ -692,19 +717,40 @@ impl CPU {
             }
             MemoryInstruction::LoadSPFromHL => self.reg.set_stack_pointer(self.reg.get_reg_hl()),
             MemoryInstruction::LoadSPIntoConstantAddress(nn) => {
-                self.set_mem(nn, self.reg.get_reg_l());
-                self.set_mem(nn + 1, self.reg.get_reg_h());
+                let [lower_byte, upper_byte] = self.reg.get_stack_pointer().to_le_bytes();
+                self.set_mem(nn, lower_byte);
+                self.set_mem(nn + 1, upper_byte);
             }
             MemoryInstruction::LoadHLFromSPOffset(offset) => {
-                let res = self.reg.get_stack_pointer() as i32 + offset as i32;
-                self.reg.set_reg_hl(res as u16);
+                let before_val = self.reg.get_stack_pointer();
+                let val = before_val.wrapping_add(offset as u16);
+                self.reg.set_reg_hl(val);
 
+                // Should be correct but isn't?!
+                self.reg.set_status_carry((before_val & 0x00FF).wrapping_add(offset as u16 & 0x00FF) & 0x100 > 0);
+                self.reg.set_status_half_carry(
+                    (((before_val & 0x000F).wrapping_add((offset as u16) & 0x000F)) & 0x10) == 0x10
+                );
                 self.reg.set_status_zero(false);
                 self.reg.set_status_negative(false);
-                self.reg.set_status_half_carry((self.reg.get_stack_pointer() & 0x000f).wrapping_add(offset as u8 as u16) & 0x10 > 0);
-                self.reg.set_status_carry((self.reg.get_stack_pointer() & 0x00Ff).wrapping_add(offset as u8 as u16) & 0x100 > 0);
+                // let res = self.reg.get_stack_pointer() as i32 + offset as i32;
+                // self.reg.set_reg_hl(res as u16);
+
+                // self.reg.set_status_zero(false);
+                // self.reg.set_status_negative(false);
+                // self.reg.set_status_half_carry((self.reg.get_stack_pointer() & 0x000f).wrapping_add(offset as u16) & 0x10 > 0);
+                // self.reg.set_status_carry((self.reg.get_stack_pointer() & 0x00Ff).wrapping_add(offset as u8 as u16) & 0x100 > 0);
             },
-            MemoryInstruction::LoadIndirectConstantToA(nn) => self.reg.set_reg_a(self.get_mem(nn)),
+            MemoryInstruction::LoadIndirectConstantToA(nn) => {
+                // println!("ld a, [{:04x}]", nn);
+                // if self.get_mem(nn) == 0x01{
+                //     println!("ld a, [{:04x}] == 1", nn);
+                // }
+                // if self.get_mem(nn) == 0x00{
+                //     println!("ld a, [{:04x}] == 0", nn);
+                // }
+                self.reg.set_reg_a(self.get_mem(nn))
+            },
             MemoryInstruction::LoadIndirectConstantFromA(nn) => {
                 self.set_mem(nn, self.reg.get_reg_a())
             }
@@ -938,18 +984,15 @@ impl CPU {
                 self.set_loc16(loc16, val);
             }
             ArithmeticInstruction::ADDSPRelative(d) => {
-                let val = self.reg.get_stack_pointer() as i32 + d as i32;
+                let before_val = self.reg.get_stack_pointer();
+                let val = before_val as i32 + d as i32;
                 self.reg.set_stack_pointer(val as u16);
 
-                // TODO
-                self.reg.set_status_zero(false);
-                self.reg.set_status_negative(false);
-            }
-            ArithmeticInstruction::LoadSPIntoHLRelative(d) => {
-                let val = self.reg.get_stack_pointer() as i32 + d as i32;
-                self.reg.set_reg_hl(val as u16);
-
-                // TODO
+                // Should be correct
+                self.reg.set_status_carry((before_val & 0x00FF).wrapping_add(d as u16 & 0x00FF) & 0x100 > 0);
+                self.reg.set_status_half_carry(
+                    (before_val & 0x000F).wrapping_add(d as u16 & 0x000F) & 0x10 > 0
+                );
                 self.reg.set_status_zero(false);
                 self.reg.set_status_negative(false);
             }
@@ -1014,7 +1057,7 @@ impl CPU {
                         self.set_loc8(loc8, res);
 
                         self.reg.set_status_zero(res == 0);
-                        self.reg.set_status_carry(res >= 0b1000_0000);
+                        self.reg.set_status_carry(loc_val >= 0b1000_0000);
                     }
                     crate::instr::ShiftRotateType::RR => {
                         let loc_val = self.get_loc8(loc8);
@@ -1026,14 +1069,25 @@ impl CPU {
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
                     },
                     crate::instr::ShiftRotateType::SLA => {
-                        todo!("SLA SRA");
+                        let loc_val = self.get_loc8(loc8);
+                        let res = loc_val << 1;
+                        self.set_loc8(loc8, res);
+
+                        self.reg.set_status_zero(res == 0);
+                        self.reg.set_status_carry(loc_val >= 0b1000_0000);
                     },
                     crate::instr::ShiftRotateType::SRA => {
-                        todo!("SLA SRA");
+                        let loc_val = self.get_loc8(loc8);
+                        let res = (loc_val >> 1) | (loc_val & 0x80);
+                        self.set_loc8(loc8, res);
+
+                        self.reg.set_status_zero(res == 0);
+                        self.reg.set_status_carry(loc_val & 0x01 == 1);
                     },
                     crate::instr::ShiftRotateType::SWAP => {
                         let loc_val = self.get_loc8(loc8);
                         let res = (loc_val << 4) | (loc_val >> 4);
+                        self.set_loc8(loc8, res);
 
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(false);
@@ -1147,6 +1201,9 @@ impl CPU {
                 };
                 if jump_flag {
                     self.reg.set_pc(nn);
+                    self.cycle += 16;
+                } else{
+                    self.cycle += 12;
                 }
             }
             JumpInstruction::JumpRelative(d) => self
@@ -1161,7 +1218,10 @@ impl CPU {
                 };
                 if jump_flag {
                     self.reg
-                        .set_pc((self.reg.get_pc() as i32 + d as i32) as u16)
+                        .set_pc((self.reg.get_pc() as i32 + d as i32) as u16);
+                    self.cycle += 12;
+                } else{
+                    self.cycle += 8;
                 }
             }
             JumpInstruction::CallConstant(nn) => {
@@ -1186,10 +1246,13 @@ impl CPU {
                     self.reg
                         .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);
                     let [lower_byte, upper_byte] = self.reg.get_pc().to_le_bytes();
-                    self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
                     self.set_mem(self.reg.get_stack_pointer(), lower_byte);
-
-                    self.reg.set_pc(nn)
+                    self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
+                    
+                    self.reg.set_pc(nn);
+                    self.cycle += 24;
+                } else{
+                    self.cycle += 12;
                 }
             }
             JumpInstruction::Return => {
@@ -1217,17 +1280,32 @@ impl CPU {
                     ];
                     self.reg.set_pc(u16::from_le_bytes([lower, higher]));
                     self.reg.set_stack_pointer(self.reg.get_stack_pointer() + 2);
+
+                    self.cycle += 20;
+                } else{
+                    self.cycle += 8;
                 }
             }
-            JumpInstruction::ReturnEnableInterrupts => todo!(),
+            JumpInstruction::ReturnEnableInterrupts => {
+                self.enable_all_interrupts();
+                let [lower, higher] = [
+                    self.get_mem(self.reg.get_stack_pointer()),
+                    self.get_mem(self.reg.get_stack_pointer() + 1),
+                ];
+                let addr = u16::from_le_bytes([lower, higher]);
+                // println!("RETURN {:x} -- lower: {:x} higher: {:x}", addr, lower, higher);
+
+                self.reg.set_pc(addr);
+                self.reg.set_stack_pointer(self.reg.get_stack_pointer() + 2);
+            },
             JumpInstruction::Reset(n) => {
                 self.reg
                     .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);
                 let [lower_byte, upper_byte] = self.reg.get_pc().to_le_bytes();
-                self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
                 self.set_mem(self.reg.get_stack_pointer(), lower_byte);
+                self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
 
-                self.reg.set_pc(n as u16 * 8)
+                self.reg.set_pc(n as u16);
             }
         }
     }

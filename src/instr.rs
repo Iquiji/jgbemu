@@ -68,7 +68,6 @@ pub enum ArithmeticInstruction {
     INC16(Location16Bit),
     DEC16(Location16Bit),
     ADDSPRelative(i8),
-    LoadSPIntoHLRelative(i8),
     /// decimal adjust A
     DAA,
     /// CPL: A = A xor FF, so invert A bitwise

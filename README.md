@@ -20,24 +20,16 @@ Boot ROM dissasembly:
 
 ## Blargg Test Suite Status
 
-[x] 01 - special
+Note: My Code is pretty much Spaghetti and Hacks at this point, but it passes, so it is to be fixed later :)
 
-[ ] 02 - interrupts (Timing of Instructions not accurate, EI not working)
-
-[x] 03 - op sp, hl 
-
-[x] 04 - op r,imm
-
-[x] 05 - op rp
-
-[x] 06 - ld r,r
-
-[x] 07 - jr, jp, call, ret, rst (jump location wrong, maybe lsb and msb switched up)
-
-[x] 08 - misc instrs
-
-[x] 09 - op r,r
-
-[x] 10 - bit ops
-
-[x] 11 - op a,(hl)
+- [x] 01 - special
+- [x] 02 - interrupts (Timing of Instructions not accurate, EI not working)
+- [x] 03 - op sp, hl 
+- [x] 04 - op r,imm
+- [x] 05 - op rp
+- [x] 06 - ld r,r
+- [x] 07 - jr, jp, call, ret, rst (jump location wrong, maybe lsb and msb switched up)
+- [x] 08 - misc instrs
+- [x] 09 - op r,r
+- [x] 10 - bit ops
+- [x] 11 - op a,(hl)

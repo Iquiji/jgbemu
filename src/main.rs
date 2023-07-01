@@ -47,10 +47,10 @@ fn main() {
     writeln!(output, "{}", cpu.print_status()).unwrap();
     let mut current_word = String::new();
     let mut last_mem = 0;
-    for i in 0.. {
+    for _i in 0.. {
         cpu.do_enable_interrupts_on_req();
-        cpu.handle_timer();
         cpu.handle_interrupts();
+        cpu.handle_timer();
         let next_instr: Instruction = cpu.next_instr();
         cpu.execute_instr(next_instr.clone());
         writeln!(output, "{}", cpu.print_status()).unwrap();
@@ -74,8 +74,8 @@ fn main() {
             last_mem = cpu.get_mem(0xFF01);
             current_word.push(cpu.get_mem(0xFF01) as char);
         }
-        if current_word.contains("Failed"){
-            break;
-        }
+        // if current_word.contains("Failed"){
+        //     break;
+        // }
     }
 }

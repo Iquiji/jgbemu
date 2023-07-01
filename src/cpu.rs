@@ -206,6 +206,7 @@ impl Registers {
 #[derive(Debug, Clone)]
 pub struct CPU {
     pub cycle: u64,
+    pub halted_flag: bool,
     pub last_tima_increment_cycle: u64,
     pub last_div_increment_cycle: u64,
     pub enable_interrupt_req: bool,
@@ -217,6 +218,7 @@ impl CPU {
     pub fn new() -> Self {
         CPU {
             cycle: 0,
+            halted_flag: false,
             last_tima_increment_cycle: 0,
             last_div_increment_cycle: 0,
             enable_interrupt_req: false,
@@ -387,33 +389,44 @@ impl CPU {
             self.enable_interrupt_req = false;
         }
     }
-    pub fn handle_interrupts(&mut self){
+    pub fn handle_interrupts(&mut self){        
         // Interrupt requested?
+        
+        // Superduper hacked version of this
+        // TCAGBD.pdf: 4.10:
+        if self.halted_flag && (self.get_mem(0xFFFF) & self.get_mem(0xFF0F)) == 0 && self.get_mem(0xFF0F) != 0{
+            self.halted_flag = false;
+            return;
+        }
+
         let allowed_interrupts = self.get_mem(0xFFFF) & self.get_mem(0xFF0F);
         if allowed_interrupts != 0{
-            println!("INTERRUPT!");
-            let address = if allowed_interrupts & 0b0000_0001 > 0{
+            // println!("INTERRUPT! Allowed: {:08b}", self.get_mem(0xFFFF) & self.get_mem(0xFF0F));
+            // println!("INTERRUPT! Requested (Not necessarily allowed): {:08b}", self.get_mem(0xFF0F));
+            self.halted_flag = false;
+            let address = if (allowed_interrupts & 0b0000_0001) == 0b0000_0001{
                 // VBlank - INT $40
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0001));
                 0x40
-            } else if allowed_interrupts & 0b0000_0010 > 0{
+            } else if (allowed_interrupts & 0b0000_0010) == 0b0000_0010{
                 // LCD STAT - INT $48
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0010));
                 0x48
-            } else if allowed_interrupts & 0b0000_0100 > 0{
+            } else if (allowed_interrupts & 0b0000_0100) == 0b0000_0100{
                 // Timer - INT $50
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0100));
                 0x50
-            } else if allowed_interrupts & 0b0000_1000 > 0{
+            } else if (allowed_interrupts & 0b0000_1000) == 0b0000_1000{
                 // Serial - INT $58
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_1000));
                 0x58
-            } else if allowed_interrupts & 0b0001_0000 > 0{
+            } else if (allowed_interrupts & 0b0001_0000) == 0b0001_0000{
                 // Joypad - INT $60
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0001_0000));
                 0x60
             } else {unreachable!()};
             self.disable_all_interrupts();
+            // println!("INTERRUPT! After get right: {:08b}", self.get_mem(0xFF0F));
 
             self.reg
                     .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);
@@ -421,7 +434,7 @@ impl CPU {
             self.set_mem(self.reg.get_stack_pointer(), lower_byte);
             self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
 
-            println!("INTERRUPT {:X} -- BACK ADDR: {:x} {:x}", address, self.get_mem(self.reg.get_stack_pointer()), self.get_mem(self.reg.get_stack_pointer() + 1));
+            // println!("INTERRUPT {:X} -- BACK ADDR: {:x} {:x}", address, self.get_mem(self.reg.get_stack_pointer()), self.get_mem(self.reg.get_stack_pointer() + 1));
 
             self.reg.set_pc(address);
             self.cycle += 5 * 4;
@@ -431,28 +444,48 @@ impl CPU {
         // TODO:
         let timer_modulo = self.get_mem(0xFF06);
         let timer_control = self.get_mem(0xFF07);
-        let timer_enable_flag = timer_control & 0b0000_0100 == 1;
+        let timer_enable_flag = (timer_control & 0b0000_0100) == 0b0000_0100;
         let timer_speed_select = timer_control & 0b0000_0011;
 
-        let timer_speed_divisor = [1024, 16, 64, 256][timer_speed_select as usize];
+        let timer_speed_divisor = [10, 4, 6, 8][timer_speed_select as usize];
 
-        if timer_enable_flag && self.cycle - self.last_tima_increment_cycle > timer_speed_divisor{
+        let delta_tima = self.cycle - self.last_tima_increment_cycle;
+
+        if timer_enable_flag {
             let current = self.get_mem(0xFF05);
-            let new = current.wrapping_add(((self.cycle - self.last_tima_increment_cycle) / timer_speed_divisor) as u8);
+            let new = current.wrapping_add(((delta_tima) >> timer_speed_divisor) as u8);
             self.set_mem(0xFF05, new);
-            if current > new{
+            if new != current{
+                // println!("Cycle: {}, TIMA: {:02x}, divisor: {}, delta: {}", self.cycle, self.get_mem(0xFF05), 1 << timer_speed_divisor, delta_tima);
+                self.last_tima_increment_cycle += ((delta_tima) >> timer_speed_divisor) * (1 << timer_speed_divisor);
+            }
+            if new < current {
+                // println!("Setting Timer Interrupt Request.");
+                // println!("allowed Interrupts: {:08b}", self.get_mem(0xFFFF));
+                // println!(" + Speed: {}", 0x01 << timer_speed_divisor);
                 self.set_mem(0xFF05, timer_modulo);
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0000_0100);
             }
+            
+        } else {
+            // this is all a big hack!
             self.last_tima_increment_cycle = self.cycle;
         }
-        let current = self.get_mem(0xFF04);
-        let new = current.wrapping_add(((self.cycle - self.last_tima_increment_cycle) / timer_speed_divisor) as u8);
+        
+        // let current = self.get_mem(0xFF04);
+        let new = (self.cycle % 256) as u8; //current.wrapping_add(((self.cycle - self.last_div_increment_cycle) / timer_speed_divisor) as u8);
         self.set_mem(0xFF04, new);
         self.last_div_increment_cycle = self.cycle;
     }
 
     pub fn next_instr(&mut self) -> Instruction {
+        if self.halted_flag{
+            return Instruction{
+                cycles: 4,
+                itype: crate::instr::InstructionType::Control(ControlInstruction::HALT),
+            }
+        }
+
         match Instruction::parse_from_bytes(
             &self.mem[(self.reg.get_pc() as usize)..(self.reg.get_pc() as usize + 1)],
         ) {
@@ -527,6 +560,9 @@ impl CPU {
 
         if instr.cycles == 64{
             // We do this in the conditional
+        } else if instr.cycles == 128 {
+            // Halt instruction reached here, so we add 4 and then we give back nop every call ig
+            self.cycle += 4;
         } else{
             self.cycle += instr.cycles as u64;
         }
@@ -1182,7 +1218,7 @@ impl CPU {
                 self.reg.set_status_carry(true);
             }
             ControlInstruction::NOP => {}
-            ControlInstruction::HALT => todo!("HALT"),
+            ControlInstruction::HALT => self.halted_flag = true,
             ControlInstruction::STOP => todo!("STOP"),
             ControlInstruction::DI => self.disable_all_interrupts(),
             ControlInstruction::EI => self.enable_all_interrupts(),

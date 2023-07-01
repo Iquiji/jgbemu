@@ -22,6 +22,8 @@ Boot ROM dissasembly:
 
 Note: My Code is pretty much Spaghetti and Hacks at this point, but it passes, so it is to be fixed later :)
 
+### CPU_INSTRS:
+
 - [x] 01 - special
 - [x] 02 - interrupts (Timing of Instructions not accurate, EI not working)
 - [x] 03 - op sp, hl 

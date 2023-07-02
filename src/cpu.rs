@@ -1,8 +1,11 @@
 use std::{fs::File, io::Read};
 
-use crate::instr::{
-    ArithmeticInstruction, ControlInstruction, Instruction, JumpInstruction, Location16Bit,
-    Location8Bit, MemoryInstruction, PRes, ShiftRotateInstruction, SingleBitInstruction,
+use crate::{
+    graphics::GraphicsController,
+    instr::{
+        ArithmeticInstruction, ControlInstruction, Instruction, JumpInstruction, Location16Bit,
+        Location8Bit, MemoryInstruction, PRes, ShiftRotateInstruction, SingleBitInstruction,
+    },
 };
 
 pub const BOOT_ROM_GB: [u8; 256] = [
@@ -207,11 +210,14 @@ impl Registers {
 pub struct CPU {
     pub cycle: u64,
     pub halted_flag: bool,
+    /// TODO:
+    pub stopped_flag: bool,
     pub last_tima_increment_cycle: u64,
     pub last_div_increment_cycle: u64,
     pub enable_interrupt_req: bool,
     pub reg: Registers,
     pub mem: [u8; 65536],
+    pub graphics_controller: GraphicsController,
 }
 
 impl CPU {
@@ -219,11 +225,13 @@ impl CPU {
         CPU {
             cycle: 0,
             halted_flag: false,
+            stopped_flag: false,
             last_tima_increment_cycle: 0,
             last_div_increment_cycle: 0,
             enable_interrupt_req: false,
             reg: Registers::default(),
             mem: [0; 65536],
+            graphics_controller: GraphicsController::default(),
         }
     }
 }
@@ -255,10 +263,10 @@ impl CPU {
         let _num_bytes = f.read_to_end(&mut buf).unwrap();
         // eprintln!("{:?}", num_bytes);
         for (idx, byte) in buf.iter().enumerate() {
-            if *byte != 0{
+            if *byte != 0 {
                 self.mem[idx] = *byte;
             }
-            if idx > 100{
+            if idx > 100 {
                 break;
             }
         }
@@ -268,33 +276,15 @@ impl CPU {
             let next_instr: Instruction = self.next_instr();
             self.execute_instr(next_instr);
         }
-        assert_eq!(
-            self.reg.get_reg_a(), 0x01
-        );
-        assert_eq!(
-            self.reg.get_reg_b(), 0x00
-        );
-        assert_eq!(
-            self.reg.get_reg_c(), 0x13
-        );
-        assert_eq!(
-            self.reg.get_reg_d(), 0x00
-        );
-        assert_eq!(
-            self.reg.get_reg_e(), 0xd8
-        );
-        assert_eq!(
-            self.reg.get_reg_h(), 0x01
-        );
-        assert_eq!(
-            self.reg.get_reg_l(), 0x4d
-        );
-        assert_eq!(
-            self.reg.get_status_zero(), true
-        );
-        assert_eq!(
-            self.reg.get_status_negative(), false
-        );
+        assert_eq!(self.reg.get_reg_a(), 0x01);
+        assert_eq!(self.reg.get_reg_b(), 0x00);
+        assert_eq!(self.reg.get_reg_c(), 0x13);
+        assert_eq!(self.reg.get_reg_d(), 0x00);
+        assert_eq!(self.reg.get_reg_e(), 0xd8);
+        assert_eq!(self.reg.get_reg_h(), 0x01);
+        assert_eq!(self.reg.get_reg_l(), 0x4d);
+        assert_eq!(self.reg.get_status_zero(), true);
+        assert_eq!(self.reg.get_status_negative(), false);
     }
     pub fn get_mem(&self, addr: u16) -> u8 {
         // TODO: hack for no lcd
@@ -376,60 +366,64 @@ impl CPU {
         )
     }
 
-    pub fn disable_all_interrupts(&mut self){
+    pub fn disable_all_interrupts(&mut self) {
         self.set_mem(0xFFFF, 0x00);
     }
-    pub fn enable_all_interrupts(&mut self){
+    pub fn enable_all_interrupts(&mut self) {
         self.enable_interrupt_req = true;
-        
     }
-    pub fn do_enable_interrupts_on_req(&mut self){
-        if self.enable_interrupt_req{
+    pub fn do_enable_interrupts_on_req(&mut self) {
+        if self.enable_interrupt_req {
             self.set_mem(0xFFFF, 0x1F);
             self.enable_interrupt_req = false;
         }
     }
-    pub fn handle_interrupts(&mut self){        
+    pub fn handle_interrupts(&mut self) {
         // Interrupt requested?
-        
+
         // Superduper hacked version of this
         // TCAGBD.pdf: 4.10:
-        if self.halted_flag && (self.get_mem(0xFFFF) & self.get_mem(0xFF0F)) == 0 && self.get_mem(0xFF0F) != 0{
+        if self.halted_flag
+            && (self.get_mem(0xFFFF) & self.get_mem(0xFF0F)) == 0
+            && self.get_mem(0xFF0F) != 0
+        {
             self.halted_flag = false;
             return;
         }
 
         let allowed_interrupts = self.get_mem(0xFFFF) & self.get_mem(0xFF0F);
-        if allowed_interrupts != 0{
+        if allowed_interrupts != 0 {
             // println!("INTERRUPT! Allowed: {:08b}", self.get_mem(0xFFFF) & self.get_mem(0xFF0F));
             // println!("INTERRUPT! Requested (Not necessarily allowed): {:08b}", self.get_mem(0xFF0F));
             self.halted_flag = false;
-            let address = if (allowed_interrupts & 0b0000_0001) == 0b0000_0001{
+            let address = if (allowed_interrupts & 0b0000_0001) == 0b0000_0001 {
                 // VBlank - INT $40
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0001));
                 0x40
-            } else if (allowed_interrupts & 0b0000_0010) == 0b0000_0010{
+            } else if (allowed_interrupts & 0b0000_0010) == 0b0000_0010 {
                 // LCD STAT - INT $48
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0010));
                 0x48
-            } else if (allowed_interrupts & 0b0000_0100) == 0b0000_0100{
+            } else if (allowed_interrupts & 0b0000_0100) == 0b0000_0100 {
                 // Timer - INT $50
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0100));
                 0x50
-            } else if (allowed_interrupts & 0b0000_1000) == 0b0000_1000{
+            } else if (allowed_interrupts & 0b0000_1000) == 0b0000_1000 {
                 // Serial - INT $58
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_1000));
                 0x58
-            } else if (allowed_interrupts & 0b0001_0000) == 0b0001_0000{
+            } else if (allowed_interrupts & 0b0001_0000) == 0b0001_0000 {
                 // Joypad - INT $60
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0001_0000));
                 0x60
-            } else {unreachable!()};
+            } else {
+                unreachable!()
+            };
             self.disable_all_interrupts();
             // println!("INTERRUPT! After get right: {:08b}", self.get_mem(0xFF0F));
 
             self.reg
-                    .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);
+                .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);
             let [lower_byte, upper_byte] = self.reg.get_pc().to_le_bytes();
             self.set_mem(self.reg.get_stack_pointer(), lower_byte);
             self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
@@ -440,7 +434,7 @@ impl CPU {
             self.cycle += 5 * 4;
         }
     }
-    pub fn handle_timer(&mut self){
+    pub fn handle_timer(&mut self) {
         // TODO:
         let timer_modulo = self.get_mem(0xFF06);
         let timer_control = self.get_mem(0xFF07);
@@ -455,9 +449,10 @@ impl CPU {
             let current = self.get_mem(0xFF05);
             let new = current.wrapping_add(((delta_tima) >> timer_speed_divisor) as u8);
             self.set_mem(0xFF05, new);
-            if new != current{
+            if new != current {
                 // println!("Cycle: {}, TIMA: {:02x}, divisor: {}, delta: {}", self.cycle, self.get_mem(0xFF05), 1 << timer_speed_divisor, delta_tima);
-                self.last_tima_increment_cycle += ((delta_tima) >> timer_speed_divisor) * (1 << timer_speed_divisor);
+                self.last_tima_increment_cycle +=
+                    ((delta_tima) >> timer_speed_divisor) * (1 << timer_speed_divisor);
             }
             if new < current {
                 // println!("Setting Timer Interrupt Request.");
@@ -466,12 +461,11 @@ impl CPU {
                 self.set_mem(0xFF05, timer_modulo);
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0000_0100);
             }
-            
         } else {
             // this is all a big hack!
             self.last_tima_increment_cycle = self.cycle;
         }
-        
+
         // let current = self.get_mem(0xFF04);
         let new = (self.cycle % 256) as u8; //current.wrapping_add(((self.cycle - self.last_div_increment_cycle) / timer_speed_divisor) as u8);
         self.set_mem(0xFF04, new);
@@ -479,11 +473,11 @@ impl CPU {
     }
 
     pub fn next_instr(&mut self) -> Instruction {
-        if self.halted_flag{
-            return Instruction{
+        if self.halted_flag {
+            return Instruction {
                 cycles: 4,
                 itype: crate::instr::InstructionType::Control(ControlInstruction::HALT),
-            }
+            };
         }
 
         match Instruction::parse_from_bytes(
@@ -558,15 +552,14 @@ impl CPU {
             crate::instr::InstructionType::Unknown => panic!(),
         }
 
-        if instr.cycles == 64{
+        if instr.cycles == 64 {
             // We do this in the conditional
         } else if instr.cycles == 128 {
             // Halt instruction reached here, so we add 4 and then we give back nop every call ig
             self.cycle += 4;
-        } else{
+        } else {
             self.cycle += instr.cycles as u64;
         }
-
     }
     pub fn execute_mem_instr(&mut self, cycles: u8, instr: MemoryInstruction) {
         match instr {
@@ -763,9 +756,11 @@ impl CPU {
                 self.reg.set_reg_hl(val);
 
                 // Should be correct but isn't?!
-                self.reg.set_status_carry((before_val & 0x00FF).wrapping_add(offset as u16 & 0x00FF) & 0x100 > 0);
+                self.reg.set_status_carry(
+                    (before_val & 0x00FF).wrapping_add(offset as u16 & 0x00FF) & 0x100 > 0,
+                );
                 self.reg.set_status_half_carry(
-                    (((before_val & 0x000F).wrapping_add((offset as u16) & 0x000F)) & 0x10) == 0x10
+                    (((before_val & 0x000F).wrapping_add((offset as u16) & 0x000F)) & 0x10) == 0x10,
                 );
                 self.reg.set_status_zero(false);
                 self.reg.set_status_negative(false);
@@ -776,7 +771,7 @@ impl CPU {
                 // self.reg.set_status_negative(false);
                 // self.reg.set_status_half_carry((self.reg.get_stack_pointer() & 0x000f).wrapping_add(offset as u16) & 0x10 > 0);
                 // self.reg.set_status_carry((self.reg.get_stack_pointer() & 0x00Ff).wrapping_add(offset as u8 as u16) & 0x100 > 0);
-            },
+            }
             MemoryInstruction::LoadIndirectConstantToA(nn) => {
                 // println!("ld a, [{:04x}]", nn);
                 // if self.get_mem(nn) == 0x01{
@@ -786,7 +781,7 @@ impl CPU {
                 //     println!("ld a, [{:04x}] == 0", nn);
                 // }
                 self.reg.set_reg_a(self.get_mem(nn))
-            },
+            }
             MemoryInstruction::LoadIndirectConstantFromA(nn) => {
                 self.set_mem(nn, self.reg.get_reg_a())
             }
@@ -827,7 +822,9 @@ impl CPU {
                         self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0);
+                        self.reg.set_status_half_carry(
+                            ((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0,
+                        );
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -836,7 +833,9 @@ impl CPU {
                         self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        self.reg.set_status_half_carry(((a_val as u8 & 0xf) - (other_val as u8 & 0xf) - cy as u8) & 0x10 > 0);
+                        self.reg.set_status_half_carry(
+                            ((a_val as u8 & 0xf) - (other_val as u8 & 0xf) - cy as u8) & 0x10 > 0,
+                        );
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -878,7 +877,9 @@ impl CPU {
                         // self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0);
+                        self.reg.set_status_half_carry(
+                            ((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0,
+                        );
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -919,7 +920,9 @@ impl CPU {
                         self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res > a_val);
-                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0);
+                        self.reg.set_status_half_carry(
+                            ((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0,
+                        );
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -928,7 +931,13 @@ impl CPU {
                         self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf).wrapping_sub(cy as u8)) & 0x10 > 0);
+                        self.reg.set_status_half_carry(
+                            ((a_val as u8 & 0xf)
+                                .wrapping_sub(other_val as u8 & 0xf)
+                                .wrapping_sub(cy as u8))
+                                & 0x10
+                                > 0,
+                        );
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -965,7 +974,9 @@ impl CPU {
                         // self.reg.set_reg_a(res as u8);
 
                         self.reg.set_status_carry(res < 0);
-                        self.reg.set_status_half_carry(((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0);
+                        self.reg.set_status_half_carry(
+                            ((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf)) & 0x10 > 0,
+                        );
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
@@ -990,9 +1001,8 @@ impl CPU {
                 // if self.reg.get_pc() > 0x200{
                 //     println!("{:X} - DEC8 {:08b} -- {:?}",self.reg.get_pc(), before_val,(before_val as u8 & 0xf).wrapping_sub(1_u8) & 0x10 > 0);
                 // }
-                self.reg.set_status_half_carry(
-                    (before_val as u8 & 0xf).wrapping_sub(1_u8) & 0x10 > 0,
-                );
+                self.reg
+                    .set_status_half_carry((before_val as u8 & 0xf).wrapping_sub(1_u8) & 0x10 > 0);
                 self.reg.set_status_zero(val == 0);
                 self.reg.set_status_negative(true);
             }
@@ -1006,7 +1016,7 @@ impl CPU {
                 self.reg.set_status_carry(val < before_val);
                 // TODO
                 self.reg.set_status_half_carry(
-                    (before_val & 0x0FFF).wrapping_add(before_other_val & 0x0FFF) & 0x1000 > 0
+                    (before_val & 0x0FFF).wrapping_add(before_other_val & 0x0FFF) & 0x1000 > 0,
                 );
             }
             ArithmeticInstruction::INC16(loc16) => {
@@ -1025,9 +1035,11 @@ impl CPU {
                 self.reg.set_stack_pointer(val as u16);
 
                 // Should be correct
-                self.reg.set_status_carry((before_val & 0x00FF).wrapping_add(d as u16 & 0x00FF) & 0x100 > 0);
+                self.reg.set_status_carry(
+                    (before_val & 0x00FF).wrapping_add(d as u16 & 0x00FF) & 0x100 > 0,
+                );
                 self.reg.set_status_half_carry(
-                    (before_val & 0x000F).wrapping_add(d as u16 & 0x000F) & 0x10 > 0
+                    (before_val & 0x000F).wrapping_add(d as u16 & 0x000F) & 0x10 > 0,
                 );
                 self.reg.set_status_zero(false);
                 self.reg.set_status_negative(false);
@@ -1037,27 +1049,31 @@ impl CPU {
                 let value = self.reg.get_reg_a();
                 let mut correction = 0;
 
-                if self.reg.get_status_half_carry() || (
-                    !self.reg.get_status_negative() && ((value & 0x0f) > 9)
-                ){
+                if self.reg.get_status_half_carry()
+                    || (!self.reg.get_status_negative() && ((value & 0x0f) > 9))
+                {
                     correction |= 0x06;
                 }
 
-                if self.reg.get_status_carry() || (
-                    !self.reg.get_status_negative() && (value  > 0x99)
-                ){
+                if self.reg.get_status_carry()
+                    || (!self.reg.get_status_negative() && (value > 0x99))
+                {
                     correction |= 0x60;
-                    self.reg.set_status_carry(true);   
+                    self.reg.set_status_carry(true);
                 }
 
-                let res = if self.reg.get_status_negative() {value as i32 - correction as i32} else {value as i32 + correction as i32};
+                let res = if self.reg.get_status_negative() {
+                    value as i32 - correction as i32
+                } else {
+                    value as i32 + correction as i32
+                };
                 let res_value = res as u8;
 
                 self.reg.set_status_half_carry(false);
                 self.reg.set_status_zero(res_value == 0);
-                
+
                 self.reg.set_reg_a(res_value);
-            },
+            }
             ArithmeticInstruction::CPL => {
                 self.reg.set_reg_a(self.reg.get_reg_a() ^ 0xFF);
 
@@ -1073,19 +1089,19 @@ impl CPU {
                     crate::instr::ShiftRotateType::RLC => {
                         let loc_val = self.get_loc8(loc8);
                         let res = loc_val << 1 | loc_val >> 7;
-                        self.set_loc8(loc8,res);
+                        self.set_loc8(loc8, res);
 
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val >= 0b1000_0000);
-                    },
+                    }
                     crate::instr::ShiftRotateType::RRC => {
                         let loc_val = self.get_loc8(loc8);
                         let res = loc_val >> 1 | loc_val << 7;
-                        self.set_loc8(loc8,res);
+                        self.set_loc8(loc8, res);
 
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
-                    },
+                    }
                     crate::instr::ShiftRotateType::RL => {
                         let loc_val = self.get_loc8(loc8);
                         let res =
@@ -1103,7 +1119,7 @@ impl CPU {
 
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
-                    },
+                    }
                     crate::instr::ShiftRotateType::SLA => {
                         let loc_val = self.get_loc8(loc8);
                         let res = loc_val << 1;
@@ -1111,7 +1127,7 @@ impl CPU {
 
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val >= 0b1000_0000);
-                    },
+                    }
                     crate::instr::ShiftRotateType::SRA => {
                         let loc_val = self.get_loc8(loc8);
                         let res = (loc_val >> 1) | (loc_val & 0x80);
@@ -1119,7 +1135,7 @@ impl CPU {
 
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
-                    },
+                    }
                     crate::instr::ShiftRotateType::SWAP => {
                         let loc_val = self.get_loc8(loc8);
                         let res = (loc_val << 4) | (loc_val >> 4);
@@ -1127,7 +1143,7 @@ impl CPU {
 
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(false);
-                    },
+                    }
                     crate::instr::ShiftRotateType::SRL => {
                         let loc_val = self.get_loc8(loc8);
                         let res = loc_val >> 1;
@@ -1135,7 +1151,7 @@ impl CPU {
 
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
-                    },
+                    }
                 }
 
                 self.reg.set_status_negative(false);
@@ -1150,7 +1166,7 @@ impl CPU {
                 self.reg.set_status_carry(loc_val >= 0b1000_0000);
                 self.reg.set_status_negative(false);
                 self.reg.set_status_half_carry(false);
-            },
+            }
             ShiftRotateInstruction::RRCA => {
                 let loc_val = self.reg.get_reg_a();
                 let res = loc_val >> 1 | loc_val << 7;
@@ -1160,7 +1176,7 @@ impl CPU {
                 self.reg.set_status_carry(loc_val & 0x01 == 1);
                 self.reg.set_status_negative(false);
                 self.reg.set_status_half_carry(false);
-            },
+            }
             ShiftRotateInstruction::RLA => {
                 let loc_val = self.reg.get_reg_a();
                 let res = (loc_val << 1) + (if self.reg.get_status_carry() { 1 } else { 0 });
@@ -1173,15 +1189,14 @@ impl CPU {
             }
             ShiftRotateInstruction::RRA => {
                 let loc_val = self.reg.get_reg_a();
-                let res =
-                    (loc_val >> 1) + (if self.reg.get_status_carry() { 0x80 } else { 0 });
+                let res = (loc_val >> 1) + (if self.reg.get_status_carry() { 0x80 } else { 0 });
                 self.reg.set_reg_a(res);
 
                 self.reg.set_status_zero(false);
                 self.reg.set_status_carry(loc_val & 0x01 == 1);
                 self.reg.set_status_negative(false);
                 self.reg.set_status_half_carry(false);
-            },
+            }
         }
     }
     fn execute_single_bit_instr(&mut self, cycles: u8, instr: SingleBitInstruction) {
@@ -1219,7 +1234,7 @@ impl CPU {
             }
             ControlInstruction::NOP => {}
             ControlInstruction::HALT => self.halted_flag = true,
-            ControlInstruction::STOP => todo!("STOP"),
+            ControlInstruction::STOP => self.stopped_flag = true,
             ControlInstruction::DI => self.disable_all_interrupts(),
             ControlInstruction::EI => self.enable_all_interrupts(),
         }
@@ -1238,7 +1253,7 @@ impl CPU {
                 if jump_flag {
                     self.reg.set_pc(nn);
                     self.cycle += 16;
-                } else{
+                } else {
                     self.cycle += 12;
                 }
             }
@@ -1256,7 +1271,7 @@ impl CPU {
                     self.reg
                         .set_pc((self.reg.get_pc() as i32 + d as i32) as u16);
                     self.cycle += 12;
-                } else{
+                } else {
                     self.cycle += 8;
                 }
             }
@@ -1284,10 +1299,10 @@ impl CPU {
                     let [lower_byte, upper_byte] = self.reg.get_pc().to_le_bytes();
                     self.set_mem(self.reg.get_stack_pointer(), lower_byte);
                     self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
-                    
+
                     self.reg.set_pc(nn);
                     self.cycle += 24;
-                } else{
+                } else {
                     self.cycle += 12;
                 }
             }
@@ -1318,7 +1333,7 @@ impl CPU {
                     self.reg.set_stack_pointer(self.reg.get_stack_pointer() + 2);
 
                     self.cycle += 20;
-                } else{
+                } else {
                     self.cycle += 8;
                 }
             }
@@ -1333,7 +1348,7 @@ impl CPU {
 
                 self.reg.set_pc(addr);
                 self.reg.set_stack_pointer(self.reg.get_stack_pointer() + 2);
-            },
+            }
             JumpInstruction::Reset(n) => {
                 self.reg
                     .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);

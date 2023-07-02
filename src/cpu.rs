@@ -283,15 +283,19 @@ impl CPU {
         assert_eq!(self.reg.get_reg_e(), 0xd8);
         assert_eq!(self.reg.get_reg_h(), 0x01);
         assert_eq!(self.reg.get_reg_l(), 0x4d);
-        assert_eq!(self.reg.get_status_zero(), true);
-        assert_eq!(self.reg.get_status_negative(), false);
+        assert!(self.reg.get_status_zero());
+        assert!(!self.reg.get_status_negative());
     }
     pub fn get_mem(&self, addr: u16) -> u8 {
         // TODO: hack for no lcd
-        if addr == 0xFF44 {
-            return 0x90;
+        if (0xFF40..=0xFF4B).contains(&addr)
+            || (0x8000..=0x9FFF).contains(&addr)
+            || (0xFE00..=0xFE9F).contains(&addr)
+        {
+            self.graphics_controller.memory_get(addr)
+        } else {
+            self.mem[addr as usize]
         }
-        self.mem[addr as usize]
     }
     pub fn set_mem(&mut self, addr: u16, byte: u8) {
         // if addr > 0xDD00 && addr < 0xDD05{
@@ -303,7 +307,14 @@ impl CPU {
         // if addr == 0xdd02{
         //     println!("!!!! 0xdd02={:02x}", byte);
         // }
-        self.mem[addr as usize] = byte;
+        if (0xFF40..=0xFF4B).contains(&addr)
+            || (0x8000..=0x9FFF).contains(&addr)
+            || (0xFE00..=0xFE9F).contains(&addr)
+        {
+            self.graphics_controller.memory_set(addr, byte)
+        } else {
+            self.mem[addr as usize] = byte;
+        }
     }
     pub fn get_loc8(&self, loc: Location8Bit) -> u8 {
         match loc {

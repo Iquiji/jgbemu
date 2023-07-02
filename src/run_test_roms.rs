@@ -35,14 +35,6 @@ pub fn run() {
         cpu.reg.get_status_carry()
     );
 
-    let minus = -1_i8;
-    println!("{:08b}\n{:016b}", minus, minus as u16);
-    println!(
-        "{}",
-        (((0x0_u16 & 0x000F).wrapping_add(((-1_i8) as u16) & 0x000F)) & 0x10) == 0x10
-    );
-    println!("{}", i8::from_le_bytes([0xFF]));
-
     let mut output = File::create(format!("blargg_{}.log", rom_num)).unwrap();
     writeln!(output, "{}", cpu.print_status()).unwrap();
     let mut current_word = String::new();

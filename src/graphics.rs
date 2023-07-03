@@ -93,6 +93,9 @@ impl GraphicsController {
     }
 
     pub fn print_current_frame(&mut self) {
+        // TODO: Line Based Renderer :)
+        // This also needs window and object handling :)
+
         let mut image_buffer = [[0_u8; 256] ; 256];
 
         let bg_tile_area: u16 = if self.graphics_status[0x00] & 0b0000_1000 > 0{ 0x9C00 } else { 0x9800 };
@@ -118,20 +121,30 @@ impl GraphicsController {
 
                     let second_byte = self.vram[tile_addr + y_pixel * 2 + 1];
                     for x_pixel in 0..8{
-                        // No inverted Tiles
-                        let x_pixel = 7 - x_pixel;
-                        let pixel_color_idx = ((first_byte & (1 << x_pixel)) >> x_pixel) | (((second_byte & (1 << x_pixel)) >> x_pixel) << 1);
-                        let pixel_color: u8 = [0x00, 0x55, 0xAA, 0xFF][pixel_color_idx as usize];
+                        // No inverted Tiles, thats why we do 7 - x_pixel
+                        let bit = 7 - x_pixel;
+                        let first_bit = first_byte & (1 << bit);
+                        let second_bit = second_byte & (1 << bit);
+                        let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
 
-                        image_buffer[(y * 8 + y_pixel as u16) as usize][(x * 8 + x_pixel) as usize] = pixel_color;
+                        image_buffer[(y * 8 + y_pixel as u16) as usize][(x * 8 + x_pixel) as usize] = pixel_color_idx;
                     }
                 }
             }
         }
 
+        let bg_palette_data = self.graphics_status[0x07];
+        let color_idx_idx: [u8; 4] = [
+            (bg_palette_data & 0b0000_0011),
+            (bg_palette_data & 0b0000_1100) >> 2,
+            (bg_palette_data & 0b0011_0000) >> 4,
+            (bg_palette_data & 0b1100_0000) >> 6,
+        ];
+        let color_lookup: [u8; 4] = [0x00, 0x55, 0xAA, 0xFF];
+
         // Save Image to Disk for now
         let img = ImageBuffer::from_fn(256, 256, |x, y| {
-            let px = image_buffer[y as usize][x as usize];
+            let px = color_lookup[color_idx_idx[image_buffer[y as usize][x as usize] as usize] as usize];
             image::Rgb([px, px, px])
         });
         img.save("img_out/gb_screen.png").unwrap();

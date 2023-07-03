@@ -86,7 +86,9 @@ pub fn run_rom(path: &str) {
         cpu.handle_timer();
         let next_instr: Instruction = cpu.next_instr();
         cpu.execute_instr(next_instr.clone());
-        cpu.graphics_controller.tick(cpu.cycle);
+        if cpu.graphics_controller.tick(cpu.cycle) {
+            cpu.set_mem(0xFF0F, cpu.get_mem(0xFF0F) | 0b0000_0010);
+        };
         // writeln!(output, "{}", cpu.print_status()).unwrap();
 
         if cpu.get_mem(0xFF01) != last_mem {

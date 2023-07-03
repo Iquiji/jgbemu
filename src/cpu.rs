@@ -247,6 +247,9 @@ impl CPU {
         for (i, byte) in BOOT_ROM_GB.iter().enumerate() {
             self.mem[i] = *byte;
         }
+        if self.mem[0x0147] != 0{
+            unimplemented!();
+        }
     }
     pub fn load_blargg_test_rom(&mut self, path: &str) {
         let mut f = File::open(path).unwrap();
@@ -278,7 +281,9 @@ impl CPU {
             self.handle_timer();
             let next_instr: Instruction = self.next_instr();
             self.execute_instr(next_instr.clone());
-            self.graphics_controller.tick(self.cycle);
+            if self.graphics_controller.tick(self.cycle) {
+                self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0000_0010);
+            };
         }
         assert_eq!(self.reg.get_reg_a(), 0x01);
         assert_eq!(self.reg.get_reg_b(), 0x00);
@@ -1248,7 +1253,10 @@ impl CPU {
             }
             ControlInstruction::NOP => {}
             ControlInstruction::HALT => self.halted_flag = true,
-            ControlInstruction::STOP => self.stopped_flag = true,
+            ControlInstruction::STOP => {
+                self.stopped_flag = true;
+                unimplemented!()
+            },
             ControlInstruction::DI => self.disable_all_interrupts(),
             ControlInstruction::EI => self.enable_all_interrupts(),
         }

@@ -36,6 +36,7 @@ pub struct GraphicsController {
     oam: [u8; 160],
     /// Last Ticked cycle, for updating ppu in the correct spped
     last_tick_cycle: u64,
+    image_buffer: [[u8; 160]; 144],
 }
 
 impl GraphicsController {
@@ -57,6 +58,7 @@ impl GraphicsController {
             vram: [0x00; 0x2000],
             oam: [0x00; 160],
             last_tick_cycle: 0,
+            image_buffer: [[0; 160]; 144]
         }
     }
 }
@@ -69,7 +71,7 @@ impl GraphicsController {
 
         // 154 Scanlines of which 0 to 153 are active and 144 to 153 are VBlank
         // 154 scanlines = 70224 cycles, 1 scanline = 456 Cycles
-        let current_scanline = (cycle / 154) as u8;
+        let current_scanline = ((cycle / 456) % 154) as u8;
         self.graphics_status[0x04] = current_scanline;
         if current_scanline == self.graphics_status[0x05]{
             // LY = LYC
@@ -82,6 +84,12 @@ impl GraphicsController {
             self.graphics_status[0x01] &= !0b0000_0100;
         }
 
+        // this is executed too often but lets fix that later
+        // I mean multiple times per scanline potentially
+        if current_scanline < 144{
+            self.render_line(current_scanline);
+        }
+
         if current_scanline == 144 {
             self.print_current_frame();
         }
@@ -92,46 +100,24 @@ impl GraphicsController {
         req_stat_interrupt_res
     }
 
-    pub fn print_current_frame(&mut self) {
-        // TODO: Line Based Renderer :)
-        // This also needs window and object handling :)
+    /// Render a line
+    /// May need to be pixel/dot based in the future for more precision
+    pub fn render_line(&mut self, line: u8) {
+        let bg_window_enable = self.graphics_status[0x00] & 0b0000_0001 > 0;
+        let window_enable = self.graphics_status[0x00] & 0b0010_0000 > 0;
+        let obj_enable = self.graphics_status[0x00] & 0b0000_0010 > 0;
 
-        let mut image_buffer = [[0_u8; 256] ; 256];
+        let obj_size_big = self.graphics_status[0x00] & 0b0000_0100 > 0;
 
+        let window_tile_area = if self.graphics_status[0x00] & 0b0000_1000 > 0{ 0x9C00 } else { 0x9800 };
         let bg_tile_area: u16 = if self.graphics_status[0x00] & 0b0000_1000 > 0{ 0x9C00 } else { 0x9800 };
         let bg_window_addressing_mode = self.graphics_status[0x00] & 0b0001_0000 > 0; 
-        
-        // println!("Status: {:08b}", self.graphics_status[0x00]);
 
-        for x in 0..32{
-            for y in 0..32{
-                let idx = x + 32 * y;
-                let tile_idx = self.vram[(bg_tile_area - 0x8000 + idx) as usize];
-                let tile_addr = if bg_window_addressing_mode{
-                    (0x8000_u16 +  (tile_idx as u16) * 16) as usize - 0x8000
-                } else {
-                    (0x9000_i32 + (tile_idx as i32) * 16) as u16 as usize - 0x8000
-                };
+        let bg_scroll_y = self.graphics_status[0x02];
+        let bg_scroll_x = self.graphics_status[0x03];
 
-                for y_pixel in 0..8{
-                    let first_byte = self.vram[tile_addr + y_pixel * 2];
-                    // if first_byte != 0{
-                    //     println!("first byte != 0: {:02x} at address {:02x} relative VRAM", first_byte, tile_addr + y_pixel);
-                    // }
-
-                    let second_byte = self.vram[tile_addr + y_pixel * 2 + 1];
-                    for x_pixel in 0..8{
-                        // No inverted Tiles, thats why we do 7 - x_pixel
-                        let bit = 7 - x_pixel;
-                        let first_bit = first_byte & (1 << bit);
-                        let second_bit = second_byte & (1 << bit);
-                        let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
-
-                        image_buffer[(y * 8 + y_pixel as u16) as usize][(x * 8 + x_pixel) as usize] = pixel_color_idx;
-                    }
-                }
-            }
-        }
+        let window_pos_y = self.graphics_status[0x0A];
+        let window_pos_x = self.graphics_status[0x0B];
 
         let bg_palette_data = self.graphics_status[0x07];
         let color_idx_idx: [u8; 4] = [
@@ -142,9 +128,89 @@ impl GraphicsController {
         ];
         let color_lookup: [u8; 4] = [0x00, 0x55, 0xAA, 0xFF];
 
+        // Render Background
+        let bg_y = line.wrapping_add(bg_scroll_y);
+        // let 
+
+        for x in 0_u8..160{
+            let bg_x = x.wrapping_add(bg_scroll_x);
+            
+            let tile_idx_x = bg_x / 8;
+            let tile_idx_y = bg_y / 8;
+
+            let tile_idx = self.vram[(bg_tile_area - 0x8000_u16 + tile_idx_x as u16 + 32 * tile_idx_y as u16) as usize];
+            let tile_addr: u16 = if bg_window_addressing_mode{
+                (0x8000_u16 +  (tile_idx as u16) * 16) - 0x8000
+            } else {
+                (0x9000_i32 + (tile_idx as i32) * 16) as u16 - 0x8000
+            };
+            let first_byte = self.vram[(tile_addr + (line as u16 % 8) * 2) as usize];
+            let second_byte = self.vram[(tile_addr + (line as u16 % 8) * 2 + 1) as usize];
+
+            let bit = 7 - (bg_x % 8);
+            let first_bit = first_byte & (1 << bit);
+            let second_bit = second_byte & (1 << bit);
+            let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
+
+            self.image_buffer[line as usize][x as usize] = color_lookup[color_idx_idx[pixel_color_idx as usize] as usize];
+        }
+
+        // Todo: Render Window
+
+
+        // Todo: Render Objects
+    }
+
+    pub fn print_current_frame(&mut self) {
+        // let mut image_buffer = [[0_u8; 256] ; 256];
+
+        // let bg_tile_area: u16 = if self.graphics_status[0x00] & 0b0000_1000 > 0{ 0x9C00 } else { 0x9800 };
+        // let bg_window_addressing_mode = self.graphics_status[0x00] & 0b0001_0000 > 0; 
+        
+        // // println!("Status: {:08b}", self.graphics_status[0x00]);
+
+        // for x in 0..32{
+        //     for y in 0..32{
+        //         let idx = x + 32 * y;
+        //         let tile_idx = self.vram[(bg_tile_area - 0x8000 + idx) as usize];
+        //         let tile_addr = if bg_window_addressing_mode{
+        //             (0x8000_u16 +  (tile_idx as u16) * 16) as usize - 0x8000
+        //         } else {
+        //             (0x9000_i32 + (tile_idx as i32) * 16) as u16 as usize - 0x8000
+        //         };
+
+        //         for y_pixel in 0..8{
+        //             let first_byte = self.vram[tile_addr + y_pixel * 2];
+        //             // if first_byte != 0{
+        //             //     println!("first byte != 0: {:02x} at address {:02x} relative VRAM", first_byte, tile_addr + y_pixel);
+        //             // }
+
+        //             let second_byte = self.vram[tile_addr + y_pixel * 2 + 1];
+        //             for x_pixel in 0..8{
+        //                 // No inverted Tiles, thats why we do 7 - x_pixel
+        //                 let bit = 7 - x_pixel;
+        //                 let first_bit = first_byte & (1 << bit);
+        //                 let second_bit = second_byte & (1 << bit);
+        //                 let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
+
+        //                 image_buffer[(y * 8 + y_pixel as u16) as usize][(x * 8 + x_pixel) as usize] = pixel_color_idx;
+        //             }
+        //         }
+        //     }
+        // }
+
+        // let bg_palette_data = self.graphics_status[0x07];
+        // let color_idx_idx: [u8; 4] = [
+        //     (bg_palette_data & 0b0000_0011),
+        //     (bg_palette_data & 0b0000_1100) >> 2,
+        //     (bg_palette_data & 0b0011_0000) >> 4,
+        //     (bg_palette_data & 0b1100_0000) >> 6,
+        // ];
+        // let color_lookup: [u8; 4] = [0x00, 0x55, 0xAA, 0xFF];
+
         // Save Image to Disk for now
-        let img = ImageBuffer::from_fn(256, 256, |x, y| {
-            let px = color_lookup[color_idx_idx[image_buffer[y as usize][x as usize] as usize] as usize];
+        let img = ImageBuffer::from_fn(160, 144, |x, y| {
+            let px = self.image_buffer[y as usize][x as usize];
             image::Rgb([px, px, px])
         });
         img.save("img_out/gb_screen.png").unwrap();

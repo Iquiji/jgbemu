@@ -273,8 +273,12 @@ impl CPU {
     }
     pub fn run_till_0x100(&mut self) {
         while self.reg.get_pc() != 0x100 {
+            self.do_enable_interrupts_on_req();
+            self.handle_interrupts();
+            self.handle_timer();
             let next_instr: Instruction = self.next_instr();
-            self.execute_instr(next_instr);
+            self.execute_instr(next_instr.clone());
+            self.graphics_controller.tick(self.cycle);
         }
         assert_eq!(self.reg.get_reg_a(), 0x01);
         assert_eq!(self.reg.get_reg_b(), 0x00);
@@ -287,7 +291,6 @@ impl CPU {
         assert!(!self.reg.get_status_negative());
     }
     pub fn get_mem(&self, addr: u16) -> u8 {
-        // TODO: hack for no lcd
         if (0xFF40..=0xFF4B).contains(&addr)
             || (0x8000..=0x9FFF).contains(&addr)
             || (0xFE00..=0xFE9F).contains(&addr)

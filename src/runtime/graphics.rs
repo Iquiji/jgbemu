@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use image::ImageBuffer;
 
 #[derive(Debug, Clone)]
@@ -36,11 +38,13 @@ pub struct GraphicsController {
     oam: [u8; 160],
     /// Last Ticked cycle, for updating ppu in the correct spped
     last_tick_cycle: u64,
-    image_buffer: [[u8; 160]; 144],
+    // image_buffer: [[u8; 160]; 144],
+    /// VERY BIG HACK:
+    pub screen_buffer: Arc<Mutex<Box<[[u8; 160]; 144]>>>,
 }
 
 impl GraphicsController {
-    pub fn new() -> GraphicsController {
+    pub fn new(screen_buffer: Arc<Mutex<Box<[[u8; 160]; 144]>>>) -> GraphicsController {
         GraphicsController {
             graphics_status: [0x00; 12],
             /// VRAM Tile Data:
@@ -58,7 +62,8 @@ impl GraphicsController {
             vram: [0x00; 0x2000],
             oam: [0x00; 160],
             last_tick_cycle: 0,
-            image_buffer: [[0; 160]; 144],
+            // image_buffer: [[0; 160]; 144],
+            screen_buffer,
         }
     }
 }
@@ -91,9 +96,9 @@ impl GraphicsController {
             self.render_line(current_scanline);
         }
 
-        if current_scanline == 144 {
-            self.print_current_frame();
-        }
+        // if current_scanline == 144 {
+        //     self.print_current_frame();
+        // }
 
         // Rest of STAT Interrupt Bit 1-0 of FF41 LCD status unimplemented
         if current_scanline < 144 {
@@ -133,6 +138,8 @@ impl GraphicsController {
     /// Render a line
     /// May need to be pixel/dot based in the future for more precision
     pub fn render_line(&mut self, line: u8) {
+        let mut access: std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>> = self.screen_buffer.lock().unwrap();
+
         let bg_window_enable = self.graphics_status[0x00] & 0b0000_0001 > 0;
         let window_enable = self.graphics_status[0x00] & 0b0010_0000 > 0;
         let obj_enable = self.graphics_status[0x00] & 0b0000_0010 > 0;
@@ -193,10 +200,10 @@ impl GraphicsController {
                 let second_bit = second_byte & (1 << bit);
                 let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
 
-                self.image_buffer[line as usize][x as usize] =
-                    color_lookup[color_idx_idx[pixel_color_idx as usize] as usize];
+                self.set_screen_pixel(&mut access, x, line,
+                    color_lookup[color_idx_idx[pixel_color_idx as usize] as usize]);
             } else {
-                self.image_buffer[line as usize][x as usize] = color_lookup[0];
+                self.set_screen_pixel(&mut access, x, line, color_lookup[0]);
             }
         }
 
@@ -223,8 +230,8 @@ impl GraphicsController {
                 let second_bit = second_byte & (1 << bit);
                 let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
 
-                self.image_buffer[line as usize][x as usize] =
-                    color_lookup[color_idx_idx[pixel_color_idx as usize] as usize];
+                self.set_screen_pixel(&mut access, x, line,
+                    color_lookup[color_idx_idx[pixel_color_idx as usize] as usize]);
             }
         }
 
@@ -304,13 +311,13 @@ impl GraphicsController {
                         if palette_number == 0
                             && pixel_color_idx != 0
                         {
-                            self.image_buffer[line as usize][pos_x as usize] = color_lookup
+                            self.set_screen_pixel(&mut access, pos_x, line, color_lookup
                                 [obj_palette_0_color_idx_idx[pixel_color_idx as usize]
-                                    as usize];
+                                    as usize]);
                         } else if pixel_color_idx != 0 {
-                            self.image_buffer[line as usize][pos_x as usize] = color_lookup
+                            self.set_screen_pixel(&mut access, pos_x, line, color_lookup
                                 [obj_palette_1_color_idx_idx[pixel_color_idx as usize]
-                                    as usize];
+                                    as usize]);
                         }
                     }
                 }
@@ -318,10 +325,23 @@ impl GraphicsController {
         }
     }
 
+    // pub fn get_screen_buffer.lock().unwrap()(&self) -> [[u8; 160]; 144]{
+    //     self.screen_buffer.lock().unwrap()
+    // }
+    pub fn get_screen_pixel(&self, guard: &std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>>, x: u8, y: u8) -> u8{
+        let inner_slice = guard.as_slice();
+        inner_slice[y as usize][x as usize]
+    }
+    pub fn set_screen_pixel(&self, guard: &mut std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>>, x: u8, y: u8, data: u8){
+        let inner_slice = guard.as_mut_slice();
+        inner_slice[y as usize][x as usize] = data;
+    }
+
     pub fn print_current_frame(&mut self) {
+        let access: std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>> = self.screen_buffer.lock().unwrap();
         // Save Image to Disk for now
         let img = ImageBuffer::from_fn(160, 144, |x, y| {
-            let px = self.image_buffer[y as usize][x as usize];
+            let px = self.get_screen_pixel(&access, x as u8, y as u8);
             image::Rgb([px, px, px])
         });
         img.save("img_out/gb_screen.png").unwrap();
@@ -359,11 +379,5 @@ impl GraphicsController {
         } else {
             unreachable!()
         }
-    }
-}
-
-impl Default for GraphicsController {
-    fn default() -> Self {
-        GraphicsController::new()
     }
 }

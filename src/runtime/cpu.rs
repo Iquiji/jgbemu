@@ -1,8 +1,8 @@
-use std::{fs::File, io::Read};
+use std::{fs::File, io::Read, sync::{Arc, Mutex}};
 
 use crate::{
-    graphics::GraphicsController,
-    instr::{
+    runtime::graphics::GraphicsController,
+    runtime::instr::{
         ArithmeticInstruction, ControlInstruction, Instruction, JumpInstruction, Location16Bit,
         Location8Bit, MemoryInstruction, PRes, ShiftRotateInstruction, SingleBitInstruction,
     },
@@ -221,7 +221,7 @@ pub struct CPU {
 }
 
 impl CPU {
-    pub fn new() -> Self {
+    pub fn new(screen_buffer: Arc<Mutex<Box<[[u8; 160]; 144]>>>) -> Self {
         CPU {
             cycle: 0,
             halted_flag: false,
@@ -231,14 +231,8 @@ impl CPU {
             enable_interrupt_req: false,
             reg: Registers::default(),
             mem: [0; 65536],
-            graphics_controller: GraphicsController::default(),
+            graphics_controller: GraphicsController::new(screen_buffer),
         }
-    }
-}
-
-impl Default for CPU {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -495,7 +489,7 @@ impl CPU {
         if self.halted_flag {
             return Instruction {
                 cycles: 4,
-                itype: crate::instr::InstructionType::Control(ControlInstruction::HALT),
+                itype: crate::runtime::instr::InstructionType::Control(ControlInstruction::HALT),
             };
         }
 
@@ -550,25 +544,25 @@ impl CPU {
     }
     pub fn execute_instr(&mut self, instr: Instruction) {
         match instr.itype {
-            crate::instr::InstructionType::Mem(mem_instr) => {
+            crate::runtime::instr::InstructionType::Mem(mem_instr) => {
                 self.execute_mem_instr(instr.cycles, mem_instr)
             }
-            crate::instr::InstructionType::Arithmetic(arith_inst) => {
+            crate::runtime::instr::InstructionType::Arithmetic(arith_inst) => {
                 self.execute_arithmetic_instr(instr.cycles, arith_inst)
             }
-            crate::instr::InstructionType::ShiftRotate(shift_instr) => {
+            crate::runtime::instr::InstructionType::ShiftRotate(shift_instr) => {
                 self.execute_shift_rotate_instr(instr.cycles, shift_instr)
             }
-            crate::instr::InstructionType::SingleBit(single_bit_instr) => {
+            crate::runtime::instr::InstructionType::SingleBit(single_bit_instr) => {
                 self.execute_single_bit_instr(instr.cycles, single_bit_instr)
             }
-            crate::instr::InstructionType::Control(control_instr) => {
+            crate::runtime::instr::InstructionType::Control(control_instr) => {
                 self.execute_control_instr(instr.cycles, control_instr)
             }
-            crate::instr::InstructionType::Jump(jump_instr) => {
+            crate::runtime::instr::InstructionType::Jump(jump_instr) => {
                 self.execute_jump_instr(instr.cycles, jump_instr)
             }
-            crate::instr::InstructionType::Unknown => panic!(),
+            crate::runtime::instr::InstructionType::Unknown => panic!(),
         }
 
         if instr.cycles == 64 {
@@ -583,33 +577,33 @@ impl CPU {
     pub fn execute_mem_instr(&mut self, cycles: u8, instr: MemoryInstruction) {
         match instr {
             MemoryInstruction::LoadImmediate8(location8, constant) => match location8 {
-                crate::instr::Location8Bit::A => self.reg.set_reg_a(constant),
-                crate::instr::Location8Bit::B => self.reg.set_reg_b(constant),
-                crate::instr::Location8Bit::C => self.reg.set_reg_c(constant),
-                crate::instr::Location8Bit::D => self.reg.set_reg_d(constant),
-                crate::instr::Location8Bit::E => self.reg.set_reg_e(constant),
-                crate::instr::Location8Bit::H => self.reg.set_reg_h(constant),
-                crate::instr::Location8Bit::L => self.reg.set_reg_l(constant),
-                crate::instr::Location8Bit::Indirect => {
+                crate::runtime::instr::Location8Bit::A => self.reg.set_reg_a(constant),
+                crate::runtime::instr::Location8Bit::B => self.reg.set_reg_b(constant),
+                crate::runtime::instr::Location8Bit::C => self.reg.set_reg_c(constant),
+                crate::runtime::instr::Location8Bit::D => self.reg.set_reg_d(constant),
+                crate::runtime::instr::Location8Bit::E => self.reg.set_reg_e(constant),
+                crate::runtime::instr::Location8Bit::H => self.reg.set_reg_h(constant),
+                crate::runtime::instr::Location8Bit::L => self.reg.set_reg_l(constant),
+                crate::runtime::instr::Location8Bit::Indirect => {
                     self.set_mem(self.reg.get_reg_hl(), constant)
                 }
             },
             MemoryInstruction::LoadImmediate16(location16, constant) => match location16 {
-                crate::instr::Location16Bit::AF => self.reg.set_reg_af(constant),
-                crate::instr::Location16Bit::BC => self.reg.set_reg_bc(constant),
-                crate::instr::Location16Bit::DE => self.reg.set_reg_de(constant),
-                crate::instr::Location16Bit::HL => self.reg.set_reg_hl(constant),
-                crate::instr::Location16Bit::SP => self.reg.set_stack_pointer(constant),
+                crate::runtime::instr::Location16Bit::AF => self.reg.set_reg_af(constant),
+                crate::runtime::instr::Location16Bit::BC => self.reg.set_reg_bc(constant),
+                crate::runtime::instr::Location16Bit::DE => self.reg.set_reg_de(constant),
+                crate::runtime::instr::Location16Bit::HL => self.reg.set_reg_hl(constant),
+                crate::runtime::instr::Location16Bit::SP => self.reg.set_stack_pointer(constant),
             },
             MemoryInstruction::LoadIndirectToA(location16, increment_flag, decrement_flag) => {
                 match location16 {
-                    crate::instr::Location16Bit::BC => {
+                    crate::runtime::instr::Location16Bit::BC => {
                         self.reg.set_reg_a(self.get_mem(self.reg.get_reg_bc()))
                     }
-                    crate::instr::Location16Bit::DE => {
+                    crate::runtime::instr::Location16Bit::DE => {
                         self.reg.set_reg_a(self.get_mem(self.reg.get_reg_de()))
                     }
-                    crate::instr::Location16Bit::HL => {
+                    crate::runtime::instr::Location16Bit::HL => {
                         self.reg.set_reg_a(self.get_mem(self.reg.get_reg_hl()));
                         self.reg.set_reg_hl(
                             ((self.reg.get_reg_hl() as i32)
@@ -627,13 +621,13 @@ impl CPU {
             }
             MemoryInstruction::LoadIndirectFromA(location16, increment_flag, decrement_flag) => {
                 match location16 {
-                    crate::instr::Location16Bit::BC => {
+                    crate::runtime::instr::Location16Bit::BC => {
                         self.set_mem(self.reg.get_reg_bc(), self.reg.get_reg_a())
                     }
-                    crate::instr::Location16Bit::DE => {
+                    crate::runtime::instr::Location16Bit::DE => {
                         self.set_mem(self.reg.get_reg_de(), self.reg.get_reg_a())
                     }
-                    crate::instr::Location16Bit::HL => {
+                    crate::runtime::instr::Location16Bit::HL => {
                         self.set_mem(self.reg.get_reg_hl(), self.reg.get_reg_a());
                         self.reg.set_reg_hl(
                             ((self.reg.get_reg_hl() as i32)
@@ -650,7 +644,7 @@ impl CPU {
                 }
             }
             MemoryInstruction::Load(dest, source) => {
-                use crate::instr::Location8Bit::*;
+                use crate::runtime::instr::Location8Bit::*;
                 match (dest, source) {
                     (A, A) => self.reg.set_reg_a(self.reg.get_reg_a()),
                     (A, B) => self.reg.set_reg_a(self.reg.get_reg_b()),
@@ -739,11 +733,11 @@ impl CPU {
                 self.reg
                     .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);
                 let [lower_byte, upper_byte] = match location16 {
-                    crate::instr::Location16Bit::AF => self.reg.get_reg_af().to_le_bytes(),
-                    crate::instr::Location16Bit::BC => self.reg.get_reg_bc().to_le_bytes(),
-                    crate::instr::Location16Bit::DE => self.reg.get_reg_de().to_le_bytes(),
-                    crate::instr::Location16Bit::HL => self.reg.get_reg_hl().to_le_bytes(),
-                    crate::instr::Location16Bit::SP => self.reg.get_stack_pointer().to_le_bytes(),
+                    crate::runtime::instr::Location16Bit::AF => self.reg.get_reg_af().to_le_bytes(),
+                    crate::runtime::instr::Location16Bit::BC => self.reg.get_reg_bc().to_le_bytes(),
+                    crate::runtime::instr::Location16Bit::DE => self.reg.get_reg_de().to_le_bytes(),
+                    crate::runtime::instr::Location16Bit::HL => self.reg.get_reg_hl().to_le_bytes(),
+                    crate::runtime::instr::Location16Bit::SP => self.reg.get_stack_pointer().to_le_bytes(),
                 };
                 self.set_mem(self.reg.get_stack_pointer(), lower_byte);
                 self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
@@ -755,11 +749,11 @@ impl CPU {
                 ];
                 let combined = u16::from_le_bytes([lower_byte, upper_byte]);
                 match location16 {
-                    crate::instr::Location16Bit::AF => self.reg.set_reg_af(combined),
-                    crate::instr::Location16Bit::BC => self.reg.set_reg_bc(combined),
-                    crate::instr::Location16Bit::DE => self.reg.set_reg_de(combined),
-                    crate::instr::Location16Bit::HL => self.reg.set_reg_hl(combined),
-                    crate::instr::Location16Bit::SP => unreachable!(),
+                    crate::runtime::instr::Location16Bit::AF => self.reg.set_reg_af(combined),
+                    crate::runtime::instr::Location16Bit::BC => self.reg.set_reg_bc(combined),
+                    crate::runtime::instr::Location16Bit::DE => self.reg.set_reg_de(combined),
+                    crate::runtime::instr::Location16Bit::HL => self.reg.set_reg_hl(combined),
+                    crate::runtime::instr::Location16Bit::SP => unreachable!(),
                 };
                 self.reg.set_stack_pointer(self.reg.get_stack_pointer() + 2);
             }
@@ -814,7 +808,7 @@ impl CPU {
                 let cy = if self.reg.get_status_carry() { 1 } else { 0 } as i32;
 
                 match op {
-                    crate::instr::ALUOpTypes::ADD => {
+                    crate::runtime::instr::ALUOpTypes::ADD => {
                         let res = a_val + other_val;
                         self.reg.set_reg_a(res as u8);
 
@@ -825,7 +819,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::ADC => {
+                    crate::runtime::instr::ALUOpTypes::ADC => {
                         let res = a_val + other_val + cy;
                         self.reg.set_reg_a(res as u8);
 
@@ -836,7 +830,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::SUB => {
+                    crate::runtime::instr::ALUOpTypes::SUB => {
                         let res = a_val - other_val;
                         self.reg.set_reg_a(res as u8);
 
@@ -847,7 +841,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
-                    crate::instr::ALUOpTypes::SBC => {
+                    crate::runtime::instr::ALUOpTypes::SBC => {
                         let res = a_val - other_val - cy;
                         self.reg.set_reg_a(res as u8);
 
@@ -858,7 +852,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
-                    crate::instr::ALUOpTypes::AND => {
+                    crate::runtime::instr::ALUOpTypes::AND => {
                         let res = a_val as u8 & other_val as u8;
                         self.reg.set_reg_a(res);
 
@@ -867,7 +861,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::XOR => {
+                    crate::runtime::instr::ALUOpTypes::XOR => {
                         let res = a_val as u8 ^ other_val as u8;
                         self.reg.set_reg_a(res);
 
@@ -876,7 +870,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::OR => {
+                    crate::runtime::instr::ALUOpTypes::OR => {
                         let res = a_val as u8 | other_val as u8;
                         self.reg.set_reg_a(res);
 
@@ -885,7 +879,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::CP => {
+                    crate::runtime::instr::ALUOpTypes::CP => {
                         // TODO:
                         let res = a_val - other_val;
                         // println!("HL: {:x}", self.reg.get_reg_hl());
@@ -910,7 +904,7 @@ impl CPU {
                 let cy = if self.reg.get_status_carry() { 1 } else { 0 } as i32;
 
                 match op {
-                    crate::instr::ALUOpTypes::ADD => {
+                    crate::runtime::instr::ALUOpTypes::ADD => {
                         let res = a_val + other_val;
                         self.reg.set_reg_a(res as u8);
 
@@ -921,7 +915,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::ADC => {
+                    crate::runtime::instr::ALUOpTypes::ADC => {
                         let res = a_val + other_val + cy;
                         self.reg.set_reg_a(res as u8);
 
@@ -932,7 +926,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::SUB => {
+                    crate::runtime::instr::ALUOpTypes::SUB => {
                         let a_val = self.reg.get_reg_a();
                         let other_val = other_constant;
                         let res = a_val.wrapping_sub(other_val);
@@ -945,7 +939,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
-                    crate::instr::ALUOpTypes::SBC => {
+                    crate::runtime::instr::ALUOpTypes::SBC => {
                         let res = a_val - other_val - cy;
                         self.reg.set_reg_a(res as u8);
 
@@ -960,7 +954,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
                     }
-                    crate::instr::ALUOpTypes::AND => {
+                    crate::runtime::instr::ALUOpTypes::AND => {
                         let res = a_val as u8 & other_val as u8;
                         self.reg.set_reg_a(res);
 
@@ -969,7 +963,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::XOR => {
+                    crate::runtime::instr::ALUOpTypes::XOR => {
                         let res = a_val as u8 ^ other_val as u8;
                         self.reg.set_reg_a(res);
 
@@ -978,7 +972,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::OR => {
+                    crate::runtime::instr::ALUOpTypes::OR => {
                         let res = a_val as u8 | other_val as u8;
                         self.reg.set_reg_a(res);
 
@@ -987,7 +981,7 @@ impl CPU {
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(false);
                     }
-                    crate::instr::ALUOpTypes::CP => {
+                    crate::runtime::instr::ALUOpTypes::CP => {
                         // TODO:
                         let res = a_val - other_val;
                         // self.reg.set_reg_a(res as u8);
@@ -1105,7 +1099,7 @@ impl CPU {
         match instr {
             ShiftRotateInstruction::ShiftRotate(rotate_type, loc8) => {
                 match rotate_type {
-                    crate::instr::ShiftRotateType::RLC => {
+                    crate::runtime::instr::ShiftRotateType::RLC => {
                         let loc_val = self.get_loc8(loc8);
                         let res = loc_val << 1 | loc_val >> 7;
                         self.set_loc8(loc8, res);
@@ -1113,7 +1107,7 @@ impl CPU {
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val >= 0b1000_0000);
                     }
-                    crate::instr::ShiftRotateType::RRC => {
+                    crate::runtime::instr::ShiftRotateType::RRC => {
                         let loc_val = self.get_loc8(loc8);
                         let res = loc_val >> 1 | loc_val << 7;
                         self.set_loc8(loc8, res);
@@ -1121,7 +1115,7 @@ impl CPU {
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
                     }
-                    crate::instr::ShiftRotateType::RL => {
+                    crate::runtime::instr::ShiftRotateType::RL => {
                         let loc_val = self.get_loc8(loc8);
                         let res =
                             (loc_val << 1) | (if self.reg.get_status_carry() { 1 } else { 0 });
@@ -1130,7 +1124,7 @@ impl CPU {
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val >= 0b1000_0000);
                     }
-                    crate::instr::ShiftRotateType::RR => {
+                    crate::runtime::instr::ShiftRotateType::RR => {
                         let loc_val = self.get_loc8(loc8);
                         let res =
                             (loc_val >> 1) | (if self.reg.get_status_carry() { 0x80 } else { 0 });
@@ -1139,7 +1133,7 @@ impl CPU {
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
                     }
-                    crate::instr::ShiftRotateType::SLA => {
+                    crate::runtime::instr::ShiftRotateType::SLA => {
                         let loc_val = self.get_loc8(loc8);
                         let res = loc_val << 1;
                         self.set_loc8(loc8, res);
@@ -1147,7 +1141,7 @@ impl CPU {
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val >= 0b1000_0000);
                     }
-                    crate::instr::ShiftRotateType::SRA => {
+                    crate::runtime::instr::ShiftRotateType::SRA => {
                         let loc_val = self.get_loc8(loc8);
                         let res = (loc_val >> 1) | (loc_val & 0x80);
                         self.set_loc8(loc8, res);
@@ -1155,7 +1149,7 @@ impl CPU {
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(loc_val & 0x01 == 1);
                     }
-                    crate::instr::ShiftRotateType::SWAP => {
+                    crate::runtime::instr::ShiftRotateType::SWAP => {
                         let loc_val = self.get_loc8(loc8);
                         let res = (loc_val << 4) | (loc_val >> 4);
                         self.set_loc8(loc8, res);
@@ -1163,7 +1157,7 @@ impl CPU {
                         self.reg.set_status_zero(res == 0);
                         self.reg.set_status_carry(false);
                     }
-                    crate::instr::ShiftRotateType::SRL => {
+                    crate::runtime::instr::ShiftRotateType::SRL => {
                         let loc_val = self.get_loc8(loc8);
                         let res = loc_val >> 1;
                         self.set_loc8(loc8, res);
@@ -1255,7 +1249,6 @@ impl CPU {
             ControlInstruction::HALT => self.halted_flag = true,
             ControlInstruction::STOP => {
                 self.stopped_flag = true;
-                unimplemented!()
             },
             ControlInstruction::DI => self.disable_all_interrupts(),
             ControlInstruction::EI => self.enable_all_interrupts(),
@@ -1267,10 +1260,10 @@ impl CPU {
             JumpInstruction::JumpHL => self.reg.set_pc(self.reg.get_reg_hl()),
             JumpInstruction::JumpConstantConditional(condition, nn) => {
                 let jump_flag = match condition {
-                    crate::instr::JumpCondition::NZ => !self.reg.get_status_zero(),
-                    crate::instr::JumpCondition::Z => self.reg.get_status_zero(),
-                    crate::instr::JumpCondition::NC => !self.reg.get_status_carry(),
-                    crate::instr::JumpCondition::C => self.reg.get_status_carry(),
+                    crate::runtime::instr::JumpCondition::NZ => !self.reg.get_status_zero(),
+                    crate::runtime::instr::JumpCondition::Z => self.reg.get_status_zero(),
+                    crate::runtime::instr::JumpCondition::NC => !self.reg.get_status_carry(),
+                    crate::runtime::instr::JumpCondition::C => self.reg.get_status_carry(),
                 };
                 if jump_flag {
                     self.reg.set_pc(nn);
@@ -1284,10 +1277,10 @@ impl CPU {
                 .set_pc((self.reg.get_pc() as i32 + d as i32) as u16),
             JumpInstruction::JumpRelativeConditional(cond, d) => {
                 let jump_flag = match cond {
-                    crate::instr::JumpCondition::NZ => !self.reg.get_status_zero(),
-                    crate::instr::JumpCondition::Z => self.reg.get_status_zero(),
-                    crate::instr::JumpCondition::NC => !self.reg.get_status_carry(),
-                    crate::instr::JumpCondition::C => self.reg.get_status_carry(),
+                    crate::runtime::instr::JumpCondition::NZ => !self.reg.get_status_zero(),
+                    crate::runtime::instr::JumpCondition::Z => self.reg.get_status_zero(),
+                    crate::runtime::instr::JumpCondition::NC => !self.reg.get_status_carry(),
+                    crate::runtime::instr::JumpCondition::C => self.reg.get_status_carry(),
                 };
                 if jump_flag {
                     self.reg
@@ -1310,10 +1303,10 @@ impl CPU {
             }
             JumpInstruction::CallConstantConditional(cond, nn) => {
                 let jump_flag = match cond {
-                    crate::instr::JumpCondition::NZ => !self.reg.get_status_zero(),
-                    crate::instr::JumpCondition::Z => self.reg.get_status_zero(),
-                    crate::instr::JumpCondition::NC => !self.reg.get_status_carry(),
-                    crate::instr::JumpCondition::C => self.reg.get_status_carry(),
+                    crate::runtime::instr::JumpCondition::NZ => !self.reg.get_status_zero(),
+                    crate::runtime::instr::JumpCondition::Z => self.reg.get_status_zero(),
+                    crate::runtime::instr::JumpCondition::NC => !self.reg.get_status_carry(),
+                    crate::runtime::instr::JumpCondition::C => self.reg.get_status_carry(),
                 };
                 if jump_flag {
                     self.reg
@@ -1341,10 +1334,10 @@ impl CPU {
             }
             JumpInstruction::ReturnConditional(cond) => {
                 let jump_flag = match cond {
-                    crate::instr::JumpCondition::NZ => !self.reg.get_status_zero(),
-                    crate::instr::JumpCondition::Z => self.reg.get_status_zero(),
-                    crate::instr::JumpCondition::NC => !self.reg.get_status_carry(),
-                    crate::instr::JumpCondition::C => self.reg.get_status_carry(),
+                    crate::runtime::instr::JumpCondition::NZ => !self.reg.get_status_zero(),
+                    crate::runtime::instr::JumpCondition::Z => self.reg.get_status_zero(),
+                    crate::runtime::instr::JumpCondition::NC => !self.reg.get_status_carry(),
+                    crate::runtime::instr::JumpCondition::C => self.reg.get_status_carry(),
                 };
                 if jump_flag {
                     let [lower, higher] = [

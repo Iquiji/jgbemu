@@ -41,8 +41,8 @@ impl GameBoyEmulatorRuntime{
                 self.cpu.set_mem(0xFF0F, self.cpu.get_mem(0xFF0F) | 0b0000_0010);
             };
 
-            // println!("{:?}", next_instr.itype);
-            // println!(" + {}", self.cpu.print_status());
+            println!("{:?}", next_instr.itype);
+            println!(" + {}", self.cpu.print_status());
         } else {
             println!("STOPPED!");
         }

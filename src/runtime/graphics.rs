@@ -193,8 +193,8 @@ impl GraphicsController {
                 } else {
                     (0x1000_i32 + (tile_idx as i8 as i32) * 16) as u16
                 };
-                let first_byte = self.vram[(tile_addr + (line as u16 % 8) * 2) as usize];
-                let second_byte = self.vram[(tile_addr + (line as u16 % 8) * 2 + 1) as usize];
+                let first_byte = self.vram[(tile_addr + (bg_y as u16 % 8) * 2) as usize];
+                let second_byte = self.vram[(tile_addr + (bg_y as u16 % 8) * 2 + 1) as usize];
 
                 let bit = 7 - (bg_x % 8);
                 let first_bit = first_byte & (1 << bit);

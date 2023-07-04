@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read, sync::{Arc, Mutex}};
+use std::{fs::File, io::Read, sync::{Arc, Mutex}, thread::sleep, time::Duration};
 
 use log::error;
 
@@ -311,6 +311,22 @@ impl CPU {
         // if addr == 0xdd02{
         //     println!("!!!! 0xdd02={:02x}", byte);
         // }
+        // OAM DMA Transfer
+        if addr == 0xFF46 {
+            println!("OAM DMA Transfer from {:04x}", (byte as u16) << 8);
+            for i in 0_u16..0x100{
+                let src = ((byte as u16) << 8) + i;
+                let dst = 0xFE00 + i;
+                self.set_mem(dst, self.get_mem(src));
+            }
+
+            return;
+        }
+
+        if (0xFFB6..=0xFFBF).contains(&addr){
+            println!("WRITING {:02x} TO {:04x}", byte, addr)
+        }
+
         if (0xFF40..=0xFF4B).contains(&addr)
             || (0x8000..=0x9FFF).contains(&addr)
             || (0xFE00..=0xFE9F).contains(&addr)
@@ -375,9 +391,9 @@ impl CPU {
             self.reg.get_stack_pointer(),
             self.reg.get_pc(),
             self.get_mem(self.reg.get_pc()),
-            self.get_mem(self.reg.get_pc() + 1),
-            self.get_mem(self.reg.get_pc() + 2),
-            self.get_mem(self.reg.get_pc() + 3),
+            self.get_mem(self.reg.get_pc().wrapping_add(1)),
+            self.get_mem(self.reg.get_pc().wrapping_add(2)),
+            self.get_mem(self.reg.get_pc().wrapping_add(3)),
         )
     }
 
@@ -837,7 +853,7 @@ impl CPU {
             ArithmeticInstruction::ALUReg8(op, other) => {
                 let a_val = self.reg.get_reg_a() as i32;
                 let other_val = self.get_loc8(other) as i32;
-                let cy = if self.reg.get_status_carry() { 1 } else { 0 } as i32;
+                let cy = if self.reg.get_status_carry() { 1_i32 } else { 0 };
 
                 match op {
                     crate::runtime::instr::ALUOpTypes::ADD => {
@@ -879,7 +895,7 @@ impl CPU {
 
                         self.reg.set_status_carry(res < 0);
                         self.reg.set_status_half_carry(
-                            ((a_val as u8 & 0xf) - (other_val as u8 & 0xf) - cy as u8) & 0x10 > 0,
+                            ((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf).wrapping_sub(cy as u8)) & 0x10 > 0,
                         );
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
@@ -890,7 +906,7 @@ impl CPU {
 
                         self.reg.set_status_carry(false);
                         self.reg.set_status_half_carry(true);
-                        self.reg.set_status_zero(res as u8 == 0);
+                        self.reg.set_status_zero(res == 0);
                         self.reg.set_status_negative(false);
                     }
                     crate::runtime::instr::ALUOpTypes::XOR => {
@@ -1066,7 +1082,7 @@ impl CPU {
             }
             ArithmeticInstruction::INC16(loc16) => {
                 let before_val = self.get_loc16(loc16);
-                let val = before_val + 1;
+                let val = before_val.wrapping_add(1);
                 self.set_loc16(loc16, val);
             }
             ArithmeticInstruction::DEC16(loc16) => {
@@ -1323,6 +1339,7 @@ impl CPU {
                 }
             }
             JumpInstruction::CallConstant(nn) => {
+
                 self.reg
                     .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);
                 let [lower_byte, upper_byte] = self.reg.get_pc().to_le_bytes();

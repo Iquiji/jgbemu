@@ -2,6 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use image::ImageBuffer;
 
+const BG_WINDOW_HARD_CODE_ENABLE: bool = true;
+
 #[derive(Debug, Clone)]
 pub struct GraphicsController {
     /// LCD Control, Status, Position, Scrolling, and Palettes
@@ -88,13 +90,12 @@ impl GraphicsController {
             } else {
                 self.graphics_status[0x01] &= !0b0000_0100;
             }
+
+            if current_scanline < 144 {
+                self.render_line(current_scanline);
+            }
         }
 
-        // this is executed too often but lets fix that later
-        // I mean multiple times per scanline potentially
-        if current_scanline < 144 {
-            self.render_line(current_scanline);
-        }
 
         // if current_scanline == 144 {
         //     self.print_current_frame();
@@ -178,7 +179,7 @@ impl GraphicsController {
         let bg_y = line.wrapping_add(bg_scroll_y);
 
         for x in 0_u8..160 {
-            if bg_window_enable {
+            if bg_window_enable && BG_WINDOW_HARD_CODE_ENABLE{
                 let bg_x = x.wrapping_add(bg_scroll_x);
 
                 let tile_idx_x = bg_x / 8;
@@ -208,9 +209,9 @@ impl GraphicsController {
         }
 
         // Render Window
-        if bg_window_enable && window_enable && line >= window_pos_y {
+        if bg_window_enable && window_enable && line >= window_pos_y && BG_WINDOW_HARD_CODE_ENABLE{
             // the sub part is still unsure
-            for x in (window_pos_x.saturating_sub(7))..160 {
+            for x in (window_pos_x.saturating_sub(8))..160 {
                 let tile_idx_x = x / 8;
                 let tile_idx_y = line / 8;
 
@@ -268,17 +269,21 @@ impl GraphicsController {
 
                 let addr = obj * 4;
                 let pos_y = self.oam[(addr) as usize];
+                // let pos_x = self.oam[(addr + 1) as usize];
 
-                if (obj_size_big && ((pos_y as i32 - line as i32 - 16) > 0 && (pos_y as i32 - line as i32 - 16) < 16))
-                    || ((pos_y as i32 - line as i32 - 8) > 0 && (pos_y as i32 - line as i32 - 16) < 8)
+
+                if (obj_size_big && (((line as i32 + 16) - pos_y as i32) >= 0 && ((line as i32 + 16) - pos_y as i32) < 16))
+                    || (((line as i32 + 16) - pos_y as i32) >= 0 && ((line as i32 + 16) - pos_y as i32) < 8)
                 {
+                    // println!("USED OBJ at pos_y {} pos_x {} for line {}", pos_y, pos_x, line);
                     first_ten_scanline_obj[first_ten_filled_counter] = addr;
                     first_ten_filled_counter += 1;
                 }
             }
 
             for obj_addr in first_ten_scanline_obj.iter().take(first_ten_filled_counter) {
-                let pos_x = self.oam[(*obj_addr + 1) as usize] as i16 - 8;
+                let pos_y = self.oam[(*obj_addr) as usize];
+                let pos_x = self.oam[(*obj_addr + 1) as usize];
                 let tile_idx = self.oam[(*obj_addr + 2) as usize];
                 let flags = self.oam[(*obj_addr + 3) as usize];
 
@@ -288,24 +293,25 @@ impl GraphicsController {
                 let palette_number = (flags & 0b0001_0000) >> 4;
 
                 for pixel_x in 0..8 {
-                    if (pos_x + pixel_x) > 0 {
-                        let pos_x = (pos_x + pixel_x) as u8;
+                    if (pos_x as i16 + pixel_x as i16 - 8) >= 0 {
+                        let pos_x = pos_x + pixel_x - 8;
                         
                         // Render Tile
-                        let tile_idx = self.vram[tile_idx as usize];
-                        let tile_addr: u16 = (tile_idx as u16) * 16;
+                        let tile_addr = (tile_idx & if obj_size_big {0xFE} else {0xFF}) as usize * 16;
+                        // let tile_addr: u16 = (tile_addr_idx as u16) * 16;
                         
                         // Distinction from big obj not thought through
+                        let first_byte_addr = tile_addr as u16 + (line + 16 - pos_y) as u16 * 2;
+
                         let first_byte = 
-                            self.vram[(tile_addr + (line as u16 % 8) * 2) as usize];
+                            self.vram[(first_byte_addr) as usize];
                         let second_byte =
-                            self.vram[(tile_addr + (line as u16 % 8) * 2 + 1) as usize];
+                            self.vram[(first_byte_addr + 1) as usize];
 
                         let bit = 7 - (pixel_x % 8);
                         let first_bit = first_byte & (1 << bit);
                         let second_bit = second_byte & (1 << bit);
                         let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
-                        
                         
                         // Consider Transparency
                         if palette_number == 0
@@ -318,6 +324,36 @@ impl GraphicsController {
                             self.set_screen_pixel(&mut access, pos_x, line, color_lookup
                                 [obj_palette_1_color_idx_idx[pixel_color_idx as usize]
                                     as usize]);
+                        }
+
+                        if obj_size_big{
+                            let tile_addr: u16 = (1 + tile_idx as u16) * 16;
+                            
+                            // Distinction from big obj not thought through
+                            let first_byte_addr = tile_addr + (line + 16 - pos_y) as u16 * 2;
+
+                            let first_byte = 
+                                self.vram[(first_byte_addr) as usize];
+                            let second_byte =
+                                self.vram[(first_byte_addr + 1) as usize];
+
+                            let bit = 7 - (pixel_x % 8);
+                            let first_bit = first_byte & (1 << bit);
+                            let second_bit = second_byte & (1 << bit);
+                            let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
+                            
+                            // Consider Transparency
+                            if palette_number == 0
+                                && pixel_color_idx != 0
+                            {
+                                self.set_screen_pixel(&mut access, pos_x, line, color_lookup
+                                    [obj_palette_0_color_idx_idx[pixel_color_idx as usize]
+                                        as usize]);
+                            } else if pixel_color_idx != 0 {
+                                self.set_screen_pixel(&mut access, pos_x, line, color_lookup
+                                    [obj_palette_1_color_idx_idx[pixel_color_idx as usize]
+                                        as usize]);
+                            }
                         }
                     }
                 }

@@ -1,11 +1,13 @@
 use std::{fs::File, io::Read, sync::{Arc, Mutex}};
 
+use log::error;
+
 use crate::{
     runtime::graphics::GraphicsController,
     runtime::instr::{
         ArithmeticInstruction, ControlInstruction, Instruction, JumpInstruction, Location16Bit,
         Location8Bit, MemoryInstruction, PRes, ShiftRotateInstruction, SingleBitInstruction,
-    },
+    }, ui::UserInput,
 };
 
 pub const BOOT_ROM_GB: [u8; 256] = [
@@ -242,7 +244,7 @@ impl CPU {
             self.mem[i] = *byte;
         }
         if self.mem[0x0147] != 0{
-            unimplemented!();
+            error!("Cartridge Mapper Type unsuported... running regardless:");
         }
     }
     pub fn load_blargg_test_rom(&mut self, path: &str) {
@@ -485,6 +487,36 @@ impl CPU {
         self.last_div_increment_cycle = self.cycle;
     }
 
+    pub fn handle_user_input(&mut self, user_input: UserInput) {
+        let select_action = self.get_mem(0xFF00) & 0b0010_0000 > 0;
+        let direction_action = self.get_mem(0xFF00) & 0b0001_0000 > 0;
+
+        let mut bits = self.get_mem(0xFF00) | 0b0000_1111;
+        if !direction_action {
+            bits ^= !if user_input.start {0b0000_1000} else {0};
+            bits ^= !if user_input.select {0b0000_0100} else {0};
+            bits ^= !if user_input.b {0b0000_0010} else {0};
+            bits ^= !if user_input.a {0b0000_0001} else {0};
+        } 
+        if !select_action {
+            bits &= !if user_input.down {0b0000_1000} else {0};
+            bits &= !if user_input.up {0b0000_0100} else {0};
+            bits &= !if user_input.left {0b0000_0010} else {0};
+            bits &= !if user_input.right {0b0000_0001} else {0};
+        }
+
+        self.set_mem(0xFF00, bits);
+        // println!("{:08b}", bits);
+        
+        if (bits & 0b0000_1111) != 0b0000_1111{
+            // println!("{:?}", user_input);
+            self.stopped_flag = false;
+
+
+            // TODO: Joypad Interrupt
+            // self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0001_0000);
+        }
+    }
     pub fn next_instr(&mut self) -> Instruction {
         if self.halted_flag {
             return Instruction {

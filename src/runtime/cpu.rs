@@ -1,4 +1,10 @@
-use std::{fs::File, io::Read, sync::{Arc, Mutex}, thread::sleep, time::Duration};
+use std::{
+    fs::File,
+    io::Read,
+    sync::{Arc, Mutex},
+    thread::sleep,
+    time::Duration,
+};
 
 use log::error;
 
@@ -7,7 +13,8 @@ use crate::{
     runtime::instr::{
         ArithmeticInstruction, ControlInstruction, Instruction, JumpInstruction, Location16Bit,
         Location8Bit, MemoryInstruction, PRes, ShiftRotateInstruction, SingleBitInstruction,
-    }, ui::UserInput,
+    },
+    ui::UserInput,
 };
 
 pub const BOOT_ROM_GB: [u8; 256] = [
@@ -211,12 +218,12 @@ impl Registers {
 #[derive(Debug, Clone)]
 pub struct CPU {
     pub cycle: u64,
+    pub interrupt_master_enable: bool,
     pub halted_flag: bool,
     /// TODO:
     pub stopped_flag: bool,
     pub last_tima_increment_cycle: u64,
     pub last_div_increment_cycle: u64,
-    pub enable_interrupt_req: bool,
     pub reg: Registers,
     pub mem: [u8; 65536],
     pub graphics_controller: GraphicsController,
@@ -226,11 +233,11 @@ impl CPU {
     pub fn new(screen_buffer: Arc<Mutex<Box<[[u8; 160]; 144]>>>) -> Self {
         CPU {
             cycle: 0,
+            interrupt_master_enable: false,
             halted_flag: false,
             stopped_flag: false,
             last_tima_increment_cycle: 0,
             last_div_increment_cycle: 0,
-            enable_interrupt_req: false,
             reg: Registers::default(),
             mem: [0; 65536],
             graphics_controller: GraphicsController::new(screen_buffer),
@@ -243,7 +250,7 @@ impl CPU {
         for (i, byte) in BOOT_ROM_GB.iter().enumerate() {
             self.mem[i] = *byte;
         }
-        if self.mem[0x0147] != 0{
+        if self.mem[0x0147] != 0 {
             error!("Cartridge Mapper Type unsuported... running regardless:");
         }
     }
@@ -252,9 +259,11 @@ impl CPU {
         let mut buf: Vec<u8> = vec![];
         let _num_bytes = f.read_to_end(&mut buf).unwrap();
         // eprintln!("{:?}", num_bytes);
-        for (idx, byte) in buf.iter().enumerate().skip(100) {
+        for (idx, byte) in buf.iter().enumerate().skip(256) {
+            // println!("Byte {:04x} = {:02x}", idx as u16, *byte);
             self.mem[idx] = *byte;
         }
+        // panic!()
     }
     pub fn unload_boot_rom(&mut self, path: &str) {
         let mut f = File::open(path).unwrap();
@@ -262,24 +271,26 @@ impl CPU {
         let _num_bytes = f.read_to_end(&mut buf).unwrap();
         // eprintln!("{:?}", num_bytes);
         for (idx, byte) in buf.iter().enumerate() {
-            if *byte != 0 {
-                self.mem[idx] = *byte;
-            }
-            if idx > 100 {
+            // println!("Byte {:04x} = {:02x}", idx as u16, *byte);
+            self.mem[idx] = *byte;
+            if idx > 256 {
                 break;
             }
         }
     }
     pub fn run_till_0x100(&mut self) {
         while self.reg.get_pc() != 0x100 {
-            self.do_enable_interrupts_on_req();
             self.handle_interrupts();
             self.handle_timer();
             let next_instr: Instruction = self.next_instr();
             self.execute_instr(next_instr.clone());
-            if self.graphics_controller.tick(self.cycle) {
+            let (vblank_irq, stat_irq) = self.graphics_controller.tick(self.cycle);
+            if stat_irq {
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0000_0010);
             };
+            if vblank_irq {
+                self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0000_0001);
+            }
         }
         assert_eq!(self.reg.get_reg_a(), 0x01);
         assert_eq!(self.reg.get_reg_b(), 0x00);
@@ -288,6 +299,7 @@ impl CPU {
         assert_eq!(self.reg.get_reg_e(), 0xd8);
         assert_eq!(self.reg.get_reg_h(), 0x01);
         assert_eq!(self.reg.get_reg_l(), 0x4d);
+        assert_eq!(self.reg.get_stack_pointer(), 0xFFFE);
         assert!(self.reg.get_status_zero());
         assert!(!self.reg.get_status_negative());
     }
@@ -314,7 +326,7 @@ impl CPU {
         // OAM DMA Transfer
         if addr == 0xFF46 {
             println!("OAM DMA Transfer from {:04x}", (byte as u16) << 8);
-            for i in 0_u16..0x100{
+            for i in 0_u16..0x100 {
                 let src = ((byte as u16) << 8) + i;
                 let dst = 0xFE00 + i;
                 self.set_mem(dst, self.get_mem(src));
@@ -323,9 +335,15 @@ impl CPU {
             return;
         }
 
-        if (0xFFB6..=0xFFBF).contains(&addr){
-            println!("WRITING {:02x} TO {:04x}", byte, addr)
+        // Ignore writes to ROM
+        if (0x0000..=0x7FFF).contains(&addr) {
+            println!("INVALID WRITE TO ROM in ADDR: {:04x}", addr);
+            return;
         }
+
+        // if (0xFFB6..=0xFFBF).contains(&addr) {
+        //     println!("WRITING {:02x} TO {:04x}", byte, addr)
+        // }
 
         if (0xFF40..=0xFF4B).contains(&addr)
             || (0x8000..=0x9FFF).contains(&addr)
@@ -396,19 +414,6 @@ impl CPU {
             self.get_mem(self.reg.get_pc().wrapping_add(3)),
         )
     }
-
-    pub fn disable_all_interrupts(&mut self) {
-        self.set_mem(0xFFFF, 0x00);
-    }
-    pub fn enable_all_interrupts(&mut self) {
-        self.enable_interrupt_req = true;
-    }
-    pub fn do_enable_interrupts_on_req(&mut self) {
-        if self.enable_interrupt_req {
-            self.set_mem(0xFFFF, 0x1F);
-            self.enable_interrupt_req = false;
-        }
-    }
     pub fn handle_interrupts(&mut self) {
         // Interrupt requested?
 
@@ -423,10 +428,9 @@ impl CPU {
         }
 
         let allowed_interrupts = self.get_mem(0xFFFF) & self.get_mem(0xFF0F);
-        if allowed_interrupts != 0 {
-            // println!("INTERRUPT! Allowed: {:08b}", self.get_mem(0xFFFF) & self.get_mem(0xFF0F));
-            // println!("INTERRUPT! Requested (Not necessarily allowed): {:08b}", self.get_mem(0xFF0F));
-            self.halted_flag = false;
+        // println!("INTERRUPT! Allowed: {:08b}", self.get_mem(0xFFFF));
+        // println!("INTERRUPT! Requested (Not necessarily allowed): {:08b}", self.get_mem(0xFF0F));
+        if allowed_interrupts != 0 && self.interrupt_master_enable {
             let address = if (allowed_interrupts & 0b0000_0001) == 0b0000_0001 {
                 // VBlank - INT $40
                 self.set_mem(0xFF0F, self.get_mem(0xFF0F) & (0xFF ^ 0b0000_0001));
@@ -450,7 +454,7 @@ impl CPU {
             } else {
                 unreachable!()
             };
-            self.disable_all_interrupts();
+            self.interrupt_master_enable = false;
             // println!("INTERRUPT! After get right: {:08b}", self.get_mem(0xFF0F));
 
             self.reg
@@ -459,10 +463,18 @@ impl CPU {
             self.set_mem(self.reg.get_stack_pointer(), lower_byte);
             self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
 
-            // println!("INTERRUPT {:X} -- BACK ADDR: {:x} {:x}", address, self.get_mem(self.reg.get_stack_pointer()), self.get_mem(self.reg.get_stack_pointer() + 1));
+            println!(
+                "INTERRUPT {:X} -- BACK ADDR: {:x} {:x}",
+                address,
+                self.get_mem(self.reg.get_stack_pointer()),
+                self.get_mem(self.reg.get_stack_pointer() + 1)
+            );
 
             self.reg.set_pc(address);
             self.cycle += 5 * 4;
+        } else if allowed_interrupts != 0 && self.halted_flag {
+            // IME=0 and Interrupt Requested and Halted => return to Operation
+            self.halted_flag = false;
         }
     }
     pub fn handle_timer(&mut self) {
@@ -486,7 +498,7 @@ impl CPU {
                     ((delta_tima) >> timer_speed_divisor) * (1 << timer_speed_divisor);
             }
             if new < current {
-                // println!("Setting Timer Interrupt Request.");
+                println!("Setting Timer Interrupt Request.");
                 // println!("allowed Interrupts: {:08b}", self.get_mem(0xFFFF));
                 // println!(" + Speed: {}", 0x01 << timer_speed_divisor);
                 self.set_mem(0xFF05, timer_modulo);
@@ -504,30 +516,28 @@ impl CPU {
     }
 
     pub fn handle_user_input(&mut self, user_input: UserInput) {
-        let select_action = self.get_mem(0xFF00) & 0b0010_0000 > 0;
-        let direction_action = self.get_mem(0xFF00) & 0b0001_0000 > 0;
+        let select_action = (self.get_mem(0xFF00) & 0b0010_0000) == 0;
+        let direction_action = (self.get_mem(0xFF00) & 0b0001_0000) == 0;
 
-        let mut bits = self.get_mem(0xFF00) | 0b0000_1111;
-        if !direction_action {
-            bits ^= !if user_input.start {0b0000_1000} else {0};
-            bits ^= !if user_input.select {0b0000_0100} else {0};
-            bits ^= !if user_input.b {0b0000_0010} else {0};
-            bits ^= !if user_input.a {0b0000_0001} else {0};
-        } 
+        let mut bits = self.get_mem(0xFF00) | 0b1100_1111;
         if !select_action {
-            bits &= !if user_input.down {0b0000_1000} else {0};
-            bits &= !if user_input.up {0b0000_0100} else {0};
-            bits &= !if user_input.left {0b0000_0010} else {0};
-            bits &= !if user_input.right {0b0000_0001} else {0};
+            bits &= !if user_input.down { 0b0000_1000 } else { 0 };
+            bits &= !if user_input.up { 0b0000_0100 } else { 0 };
+            bits &= !if user_input.left { 0b0000_0010 } else { 0 };
+            bits &= !if user_input.right { 0b0000_0001 } else { 0 };
+        } else if !direction_action {
+            bits ^= !if user_input.start { 0b0000_1000 } else { 0 };
+            bits ^= !if user_input.select { 0b0000_0100 } else { 0 };
+            bits ^= !if user_input.b { 0b0000_0010 } else { 0 };
+            bits ^= !if user_input.a { 0b0000_0001 } else { 0 };
         }
 
         self.set_mem(0xFF00, bits);
         // println!("{:08b}", bits);
-        
-        if (bits & 0b0000_1111) != 0b0000_1111{
+
+        if (bits & 0b0000_1111) != 0b0000_1111 {
             // println!("{:?}", user_input);
             self.stopped_flag = false;
-
 
             // TODO: Joypad Interrupt
             // self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0001_0000);
@@ -785,7 +795,9 @@ impl CPU {
                     crate::runtime::instr::Location16Bit::BC => self.reg.get_reg_bc().to_le_bytes(),
                     crate::runtime::instr::Location16Bit::DE => self.reg.get_reg_de().to_le_bytes(),
                     crate::runtime::instr::Location16Bit::HL => self.reg.get_reg_hl().to_le_bytes(),
-                    crate::runtime::instr::Location16Bit::SP => self.reg.get_stack_pointer().to_le_bytes(),
+                    crate::runtime::instr::Location16Bit::SP => {
+                        self.reg.get_stack_pointer().to_le_bytes()
+                    }
                 };
                 self.set_mem(self.reg.get_stack_pointer(), lower_byte);
                 self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
@@ -853,7 +865,11 @@ impl CPU {
             ArithmeticInstruction::ALUReg8(op, other) => {
                 let a_val = self.reg.get_reg_a() as i32;
                 let other_val = self.get_loc8(other) as i32;
-                let cy = if self.reg.get_status_carry() { 1_i32 } else { 0 };
+                let cy = if self.reg.get_status_carry() {
+                    1_i32
+                } else {
+                    0
+                };
 
                 match op {
                     crate::runtime::instr::ALUOpTypes::ADD => {
@@ -895,7 +911,11 @@ impl CPU {
 
                         self.reg.set_status_carry(res < 0);
                         self.reg.set_status_half_carry(
-                            ((a_val as u8 & 0xf).wrapping_sub(other_val as u8 & 0xf).wrapping_sub(cy as u8)) & 0x10 > 0,
+                            ((a_val as u8 & 0xf)
+                                .wrapping_sub(other_val as u8 & 0xf)
+                                .wrapping_sub(cy as u8))
+                                & 0x10
+                                > 0,
                         );
                         self.reg.set_status_zero(res as u8 == 0);
                         self.reg.set_status_negative(true);
@@ -1297,9 +1317,9 @@ impl CPU {
             ControlInstruction::HALT => self.halted_flag = true,
             ControlInstruction::STOP => {
                 self.stopped_flag = true;
-            },
-            ControlInstruction::DI => self.disable_all_interrupts(),
-            ControlInstruction::EI => self.enable_all_interrupts(),
+            }
+            ControlInstruction::DI => self.interrupt_master_enable = false,
+            ControlInstruction::EI => self.interrupt_master_enable = true,
         }
     }
     fn execute_jump_instr(&mut self, cycles: u8, instr: JumpInstruction) {
@@ -1339,7 +1359,6 @@ impl CPU {
                 }
             }
             JumpInstruction::CallConstant(nn) => {
-
                 self.reg
                     .set_stack_pointer((self.reg.get_stack_pointer() as i32 - 2) as u16);
                 let [lower_byte, upper_byte] = self.reg.get_pc().to_le_bytes();
@@ -1402,7 +1421,6 @@ impl CPU {
                 }
             }
             JumpInstruction::ReturnEnableInterrupts => {
-                self.enable_all_interrupts();
                 let [lower, higher] = [
                     self.get_mem(self.reg.get_stack_pointer()),
                     self.get_mem(self.reg.get_stack_pointer() + 1),
@@ -1412,6 +1430,7 @@ impl CPU {
 
                 self.reg.set_pc(addr);
                 self.reg.set_stack_pointer(self.reg.get_stack_pointer() + 2);
+                self.interrupt_master_enable = true;
             }
             JumpInstruction::Reset(n) => {
                 self.reg

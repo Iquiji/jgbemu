@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::{sync::{Arc, Mutex}, time::{Instant, Duration}};
 
 use image::ImageBuffer;
 
@@ -39,7 +39,7 @@ pub struct GraphicsController {
     vram: [u8; 0x2000],
     oam: [u8; 160],
     /// Last Ticked cycle, for updating ppu in the correct spped
-    last_tick_cycle: u64,
+    last_scanline: u8,
     // image_buffer: [[u8; 160]; 144],
     /// VERY BIG HACK:
     pub screen_buffer: Arc<Mutex<Box<[[u8; 160]; 144]>>>,
@@ -63,7 +63,7 @@ impl GraphicsController {
             /// 2. $9C00-$9FFF
             vram: [0x00; 0x2000],
             oam: [0x00; 160],
-            last_tick_cycle: 0,
+            last_scanline: 0,
             // image_buffer: [[0; 160]; 144],
             screen_buffer,
         }
@@ -71,15 +71,22 @@ impl GraphicsController {
 }
 
 impl GraphicsController {
-    pub fn tick(&mut self, cycle: u64) -> bool {
-        let mut req_stat_interrupt_res = false;
+    // VBlank, STAT
+    pub fn tick(&mut self, cycle: u64) -> (bool, bool) {
+        if self.graphics_status[0x00] & 0b1000_0000 == 0 {
+            return (false, false);
+        }
 
-        // 154 Scanlines of which 0 to 153 are active and 144 to 153 are VBlank
+        let mut req_stat_interrupt_res = false;
+        let mut req_vblank_interrupt_res = false;
+
+        // 154 Scanlines of which 0 to 143 are active and 144 to 153 are VBlank
         // 154 scanlines = 70224 cycles, 1 scanline = 456 Cycles
         let current_scanline = ((cycle / 456) % 154) as u8;
         self.graphics_status[0x04] = current_scanline;
         // Only on new Scanline
-        if current_scanline > ((self.last_tick_cycle / 456) % 154) as u8 {
+        if current_scanline != self.last_scanline {
+            // println!("current_scanline: {}", current_scanline);
             if current_scanline == self.graphics_status[0x05] {
                 // LY = LYC
                 self.graphics_status[0x01] |= 0b0000_0100;
@@ -92,10 +99,20 @@ impl GraphicsController {
             }
 
             if current_scanline < 144 {
+                let now = Instant::now();
                 self.render_line(current_scanline);
+                if Instant::now() - now > Duration::from_millis(1){
+                    println!("line render took {:?}", Instant::now() - now);
+                }
+            } 
+            
+            if current_scanline >= 144 && self.last_scanline < 144 {
+                // println!("VBLANK Requested");
+                req_vblank_interrupt_res = true;
             }
-        }
 
+            self.last_scanline = current_scanline;
+        }
 
         // if current_scanline == 144 {
         //     self.print_current_frame();
@@ -123,23 +140,26 @@ impl GraphicsController {
                     req_stat_interrupt_res = true;
                 }
             }
-        } else {
-            // Mode VBlank
-            self.graphics_status[0x01] &= 0b1111_1100;
-            self.graphics_status[0x01] |= 0b0000_0001;
-            if self.graphics_status[0x01] & 0b0001_0000 > 0 {
-                req_stat_interrupt_res = true;
+            // TODO:
+            if self.last_scanline < 144 && current_scanline >= 144 {
+                // Mode VBlank
+                self.graphics_status[0x01] &= 0b1111_1100;
+                self.graphics_status[0x01] |= 0b0000_0001;
+                if self.graphics_status[0x01] & 0b0001_0000 > 0 {
+                    // VBLANK STAT
+                    req_stat_interrupt_res = true;
+                }
             }
         }
 
-        self.last_tick_cycle = cycle;
-        req_stat_interrupt_res
+        (req_vblank_interrupt_res, req_stat_interrupt_res)
     }
 
     /// Render a line
     /// May need to be pixel/dot based in the future for more precision
     pub fn render_line(&mut self, line: u8) {
-        let mut access: std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>> = self.screen_buffer.lock().unwrap();
+        let mut access: std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>> =
+            self.screen_buffer.lock().unwrap();
 
         let bg_window_enable = self.graphics_status[0x00] & 0b0000_0001 > 0;
         let window_enable = self.graphics_status[0x00] & 0b0010_0000 > 0;
@@ -179,7 +199,7 @@ impl GraphicsController {
         let bg_y = line.wrapping_add(bg_scroll_y);
 
         for x in 0_u8..160 {
-            if bg_window_enable && BG_WINDOW_HARD_CODE_ENABLE{
+            if bg_window_enable && BG_WINDOW_HARD_CODE_ENABLE {
                 let bg_x = x.wrapping_add(bg_scroll_x);
 
                 let tile_idx_x = bg_x / 8;
@@ -201,15 +221,19 @@ impl GraphicsController {
                 let second_bit = second_byte & (1 << bit);
                 let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
 
-                self.set_screen_pixel(&mut access, x, line,
-                    color_lookup[color_idx_idx[pixel_color_idx as usize] as usize]);
+                self.set_screen_pixel(
+                    &mut access,
+                    x,
+                    line,
+                    color_lookup[color_idx_idx[pixel_color_idx as usize] as usize],
+                );
             } else {
                 self.set_screen_pixel(&mut access, x, line, color_lookup[0]);
             }
         }
 
         // Render Window
-        if bg_window_enable && window_enable && line >= window_pos_y && BG_WINDOW_HARD_CODE_ENABLE{
+        if bg_window_enable && window_enable && line >= window_pos_y && BG_WINDOW_HARD_CODE_ENABLE {
             // the sub part is still unsure
             for x in (window_pos_x.saturating_sub(8))..160 {
                 let tile_idx_x = x / 8;
@@ -231,8 +255,12 @@ impl GraphicsController {
                 let second_bit = second_byte & (1 << bit);
                 let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
 
-                self.set_screen_pixel(&mut access, x, line,
-                    color_lookup[color_idx_idx[pixel_color_idx as usize] as usize]);
+                self.set_screen_pixel(
+                    &mut access,
+                    x,
+                    line,
+                    color_lookup[color_idx_idx[pixel_color_idx as usize] as usize],
+                );
             }
         }
 
@@ -271,9 +299,11 @@ impl GraphicsController {
                 let pos_y = self.oam[(addr) as usize];
                 // let pos_x = self.oam[(addr + 1) as usize];
 
-
-                if (obj_size_big && (((line as i32 + 16) - pos_y as i32) >= 0 && ((line as i32 + 16) - pos_y as i32) < 16))
-                    || (((line as i32 + 16) - pos_y as i32) >= 0 && ((line as i32 + 16) - pos_y as i32) < 8)
+                if (obj_size_big
+                    && (((line as i32 + 16) - pos_y as i32) >= 0
+                        && ((line as i32 + 16) - pos_y as i32) < 16))
+                    || (((line as i32 + 16) - pos_y as i32) >= 0
+                        && ((line as i32 + 16) - pos_y as i32) < 8)
                 {
                     // println!("USED OBJ at pos_y {} pos_x {} for line {}", pos_y, pos_x, line);
                     first_ten_scanline_obj[first_ten_filled_counter] = addr;
@@ -293,66 +323,77 @@ impl GraphicsController {
                 let palette_number = (flags & 0b0001_0000) >> 4;
 
                 for pixel_x in 0..8 {
-                    if (pos_x as i16 + pixel_x as i16 - 8) >= 0 {
+                    if (pos_x as i16 + pixel_x as i16 - 8) >= 0 && (pos_x as i16 + pixel_x as i16 - 8) < 160{
                         let pos_x = pos_x + pixel_x - 8;
-                        
+
                         // Render Tile
-                        let tile_addr = (tile_idx & if obj_size_big {0xFE} else {0xFF}) as usize * 16;
+                        let tile_addr =
+                            (tile_idx & if obj_size_big { 0xFE } else { 0xFF }) as usize * 16;
                         // let tile_addr: u16 = (tile_addr_idx as u16) * 16;
-                        
+
                         // Distinction from big obj not thought through
                         let first_byte_addr = tile_addr as u16 + (line + 16 - pos_y) as u16 * 2;
 
-                        let first_byte = 
-                            self.vram[(first_byte_addr) as usize];
-                        let second_byte =
-                            self.vram[(first_byte_addr + 1) as usize];
+                        let first_byte = self.vram[(first_byte_addr) as usize];
+                        let second_byte = self.vram[(first_byte_addr + 1) as usize];
 
                         let bit = 7 - (pixel_x % 8);
                         let first_bit = first_byte & (1 << bit);
                         let second_bit = second_byte & (1 << bit);
                         let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
-                        
+
                         // Consider Transparency
-                        if palette_number == 0
-                            && pixel_color_idx != 0
-                        {
-                            self.set_screen_pixel(&mut access, pos_x, line, color_lookup
-                                [obj_palette_0_color_idx_idx[pixel_color_idx as usize]
-                                    as usize]);
+                        if palette_number == 0 && pixel_color_idx != 0 {
+                            self.set_screen_pixel(
+                                &mut access,
+                                pos_x,
+                                line,
+                                color_lookup[obj_palette_0_color_idx_idx[pixel_color_idx as usize]
+                                    as usize],
+                            );
                         } else if pixel_color_idx != 0 {
-                            self.set_screen_pixel(&mut access, pos_x, line, color_lookup
-                                [obj_palette_1_color_idx_idx[pixel_color_idx as usize]
-                                    as usize]);
+                            self.set_screen_pixel(
+                                &mut access,
+                                pos_x,
+                                line,
+                                color_lookup[obj_palette_1_color_idx_idx[pixel_color_idx as usize]
+                                    as usize],
+                            );
                         }
 
-                        if obj_size_big{
+                        if obj_size_big {
                             let tile_addr: u16 = (1 + tile_idx as u16) * 16;
-                            
+
                             // Distinction from big obj not thought through
                             let first_byte_addr = tile_addr + (line + 16 - pos_y) as u16 * 2;
 
-                            let first_byte = 
-                                self.vram[(first_byte_addr) as usize];
-                            let second_byte =
-                                self.vram[(first_byte_addr + 1) as usize];
+                            let first_byte = self.vram[(first_byte_addr) as usize];
+                            let second_byte = self.vram[(first_byte_addr + 1) as usize];
 
                             let bit = 7 - (pixel_x % 8);
                             let first_bit = first_byte & (1 << bit);
                             let second_bit = second_byte & (1 << bit);
                             let pixel_color_idx = (first_bit >> bit) | ((second_bit >> bit) << 1);
-                            
+
                             // Consider Transparency
-                            if palette_number == 0
-                                && pixel_color_idx != 0
-                            {
-                                self.set_screen_pixel(&mut access, pos_x, line, color_lookup
-                                    [obj_palette_0_color_idx_idx[pixel_color_idx as usize]
-                                        as usize]);
+                            if palette_number == 0 && pixel_color_idx != 0 {
+                                self.set_screen_pixel(
+                                    &mut access,
+                                    pos_x,
+                                    line,
+                                    color_lookup[obj_palette_0_color_idx_idx
+                                        [pixel_color_idx as usize]
+                                        as usize],
+                                );
                             } else if pixel_color_idx != 0 {
-                                self.set_screen_pixel(&mut access, pos_x, line, color_lookup
-                                    [obj_palette_1_color_idx_idx[pixel_color_idx as usize]
-                                        as usize]);
+                                self.set_screen_pixel(
+                                    &mut access,
+                                    pos_x,
+                                    line,
+                                    color_lookup[obj_palette_1_color_idx_idx
+                                        [pixel_color_idx as usize]
+                                        as usize],
+                                );
                             }
                         }
                     }
@@ -364,17 +405,29 @@ impl GraphicsController {
     // pub fn get_screen_buffer.lock().unwrap()(&self) -> [[u8; 160]; 144]{
     //     self.screen_buffer.lock().unwrap()
     // }
-    pub fn get_screen_pixel(&self, guard: &std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>>, x: u8, y: u8) -> u8{
+    pub fn get_screen_pixel(
+        &self,
+        guard: &std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>>,
+        x: u8,
+        y: u8,
+    ) -> u8 {
         let inner_slice = guard.as_slice();
         inner_slice[y as usize][x as usize]
     }
-    pub fn set_screen_pixel(&self, guard: &mut std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>>, x: u8, y: u8, data: u8){
+    pub fn set_screen_pixel(
+        &self,
+        guard: &mut std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>>,
+        x: u8,
+        y: u8,
+        data: u8,
+    ) {
         let inner_slice = guard.as_mut_slice();
         inner_slice[y as usize][x as usize] = data;
     }
 
     pub fn print_current_frame(&mut self) {
-        let access: std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>> = self.screen_buffer.lock().unwrap();
+        let access: std::sync::MutexGuard<'_, Box<[[u8; 160]; 144]>> =
+            self.screen_buffer.lock().unwrap();
         // Save Image to Disk for now
         let img = ImageBuffer::from_fn(160, 144, |x, y| {
             let px = self.get_screen_pixel(&access, x as u8, y as u8);

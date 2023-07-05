@@ -1,6 +1,9 @@
-use std::{thread::sleep, time::{Duration, Instant}};
+use std::{
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
-use crate::runtime::{GameBoyEmulatorRuntime, run_test_roms::run};
+use crate::runtime::{run_test_roms::run, GameBoyEmulatorRuntime};
 
 use error_iter::ErrorIter as _;
 use log::{debug, error, info};
@@ -16,8 +19,7 @@ use winit_input_helper::WinitInputHelper;
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 144;
 
-
-pub fn run_ui(rom: &str) -> Result<(), Box<dyn std::error::Error>>{
+pub fn run_ui(rom: &str) -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
@@ -42,39 +44,42 @@ pub fn run_ui(rom: &str) -> Result<(), Box<dyn std::error::Error>>{
     let runtime: GameBoyEmulatorRuntime = GameBoyEmulatorRuntime::new();
     let screen_buffer_share = runtime.screen_buffer.clone();
     let user_input_share = runtime.user_input.clone();
-    
+
     let rom = rom.to_string();
-    let thread_handle = std::thread::spawn(move || {
+    let _thread_handle = std::thread::spawn(move || {
         let mut runtime = runtime;
-        
-        runtime.init(&rom); 
+
+        runtime.init(&rom);
 
         let mut last_time = Instant::now();
         let mut last_cycle: u64 = runtime.cpu.cycle;
 
         let one_cycle_time = Duration::from_secs(1) / 4_194_304;
 
-        loop{
-            runtime.run_tick();
+        loop {
+            for _ in 0..100{
+                runtime.run_tick();
+            }
             let current_cycle: u64 = runtime.cpu.cycle;
             let new_time = Instant::now();
 
             let delta_cycle = (current_cycle - last_cycle) as u32;
             let expected_time = one_cycle_time * delta_cycle;
-            
+
             let delta_time = new_time - last_time;
 
             last_cycle = current_cycle;
             last_time = new_time;
 
-            if expected_time > delta_time{
+            if expected_time > delta_time && expected_time - delta_time > Duration::from_micros(40) {
                 sleep(expected_time - delta_time);
                 // println!("expected_time: {:?}, delta_time: {:?}, diff: {:?}",expected_time, delta_time, expected_time - delta_time);
+                // println!("{:?} Ahead of Target Framerate", expected_time - delta_time);
+            } else if expected_time < delta_time && delta_time - expected_time > Duration::from_micros(400) {
+                println!("{:?} Behind Target Framerate", delta_time - expected_time);
             }
-
         }
     });
-
 
     event_loop.run(move |event, _, control_flow| {
         if let Event::RedrawRequested(_) = event {
@@ -83,10 +88,10 @@ pub fn run_ui(rom: &str) -> Result<(), Box<dyn std::error::Error>>{
             let unflat_buffer = screen_buffer_share.lock().unwrap();
             // let unflat_buffer_slice = unflat_buffer.fl();
             let frame = pixels.frame_mut();
-            
+
             // pixel_buffer.fill(0x00);
 
-            for (idx, pixel) in frame.chunks_exact_mut(4).enumerate(){
+            for (idx, pixel) in frame.chunks_exact_mut(4).enumerate() {
                 let x = idx % 160;
                 let y = idx / 160;
 
@@ -104,7 +109,7 @@ pub fn run_ui(rom: &str) -> Result<(), Box<dyn std::error::Error>>{
                 return;
             }
         }
-        if input.update(&event){
+        if input.update(&event) {
             // if let Some(size) = input.window_resized() {
             //     if let Err(err) = pixels.resize_surface(size.width, size.height) {
             //         log_error("pixels.resize_surface", err);
@@ -141,13 +146,12 @@ pub fn run_ui(rom: &str) -> Result<(), Box<dyn std::error::Error>>{
             }
 
             let mut user_input_handle = user_input_share.lock().unwrap();
-            *user_input_handle = new_user_input; 
+            *user_input_handle = new_user_input;
 
             window.request_redraw();
         }
     });
 }
-
 
 /// :)
 fn log_error<E: std::error::Error + 'static>(method_name: &str, err: E) {
@@ -158,7 +162,7 @@ fn log_error<E: std::error::Error + 'static>(method_name: &str, err: E) {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct UserInput{
+pub struct UserInput {
     pub up: bool,
     pub down: bool,
     pub left: bool,

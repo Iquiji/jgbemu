@@ -325,7 +325,7 @@ impl CPU {
         // }
         // OAM DMA Transfer
         if addr == 0xFF46 {
-            println!("OAM DMA Transfer from {:04x}", (byte as u16) << 8);
+            // println!("OAM DMA Transfer from {:04x}", (byte as u16) << 8);
             for i in 0_u16..0x100 {
                 let src = ((byte as u16) << 8) + i;
                 let dst = 0xFE00 + i;
@@ -463,12 +463,12 @@ impl CPU {
             self.set_mem(self.reg.get_stack_pointer(), lower_byte);
             self.set_mem(self.reg.get_stack_pointer() + 1, upper_byte);
 
-            println!(
-                "INTERRUPT {:X} -- BACK ADDR: {:x} {:x}",
-                address,
-                self.get_mem(self.reg.get_stack_pointer()),
-                self.get_mem(self.reg.get_stack_pointer() + 1)
-            );
+            // println!(
+            //     "INTERRUPT {:X} -- BACK ADDR: {:x} {:x}",
+            //     address,
+            //     self.get_mem(self.reg.get_stack_pointer()),
+            //     self.get_mem(self.reg.get_stack_pointer() + 1)
+            // );
 
             self.reg.set_pc(address);
             self.cycle += 5 * 4;
@@ -498,7 +498,7 @@ impl CPU {
                     ((delta_tima) >> timer_speed_divisor) * (1 << timer_speed_divisor);
             }
             if new < current {
-                println!("Setting Timer Interrupt Request.");
+                // println!("Setting Timer Interrupt Request.");
                 // println!("allowed Interrupts: {:08b}", self.get_mem(0xFFFF));
                 // println!(" + Speed: {}", 0x01 << timer_speed_divisor);
                 self.set_mem(0xFF05, timer_modulo);

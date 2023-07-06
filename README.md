@@ -1,5 +1,9 @@
 # JGBEmu (Jank Gameboy Emulator)
 
+## Status:
+
+Runs Tetris! (Screenshot coming soon...)
+
 ## Sources:
 
 General Sources:
@@ -16,22 +20,3 @@ Decoding Instructions:
 Boot ROM dissasembly:
 
 - https://gist.github.com/knightsc/ab5ebda52045b87fa1772f5824717ddf
-
-
-## Blargg Test Suite Status
-
-Note: My Code is pretty much Spaghetti and Hacks at this point, but it passes, so it is to be fixed later :)
-
-### CPU_INSTRS:
-
-- [x] 01 - special
-- [x] 02 - interrupts (Timing of Instructions not accurate, EI not working)
-- [x] 03 - op sp, hl 
-- [x] 04 - op r,imm
-- [x] 05 - op rp
-- [x] 06 - ld r,r
-- [x] 07 - jr, jp, call, ret, rst (jump location wrong, maybe lsb and msb switched up)
-- [x] 08 - misc instrs
-- [x] 09 - op r,r
-- [x] 10 - bit ops
-- [x] 11 - op a,(hl)

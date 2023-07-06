@@ -53,7 +53,7 @@ impl GameBoyEmulatorRuntime {
             // println!("{:?}", next_instr.itype);
             // println!(" + {}", self.cpu.print_status());
         } else {
-            println!("STOPPED!");
+            // println!("STOPPED!");
         }
     }
 }

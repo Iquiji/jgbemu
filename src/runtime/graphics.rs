@@ -400,7 +400,7 @@ impl GraphicsController {
                     }
                 }
             }
-        } 
+        }
     }
 
     // pub fn get_screen_buffer.lock().unwrap()(&self) -> [[u8; 160]; 144]{

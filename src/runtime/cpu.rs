@@ -17,7 +17,7 @@ use crate::{
     ui::UserInput,
 };
 
-use super::banking::{MemoryBankController, NoMBC};
+use super::banking::{MemoryBankController, NoMBC, MBC1};
 
 pub const BOOT_ROM_GB: [u8; 256] = [
     0x31, 0xfe, 0xff, 0xaf, 0x21, 0xff, 0x9f, 0x32, 0xcb, 0x7c, 0x20, 0xfb, 0x21, 0x26, 0xff, 0x0e,
@@ -266,9 +266,10 @@ impl CPU {
 
         let mbc_type: u8 = buf[0x147];
         let mbc: Box<dyn MemoryBankController> = match mbc_type {
+            // No MBC
             0 => Box::new(NoMBC::load_rom(path)),
-            // TODO:
-            1 => Box::new(NoMBC::load_rom(path)),
+            // MBC1, MBC1+RAM, MBC1+RAM+Battery
+            1 | 2 | 3=> Box::new(MBC1::load_rom(path)),
             _ => todo!(),
         };
         self.mbc = Some(mbc);
@@ -309,15 +310,27 @@ impl CPU {
             self.graphics_controller.memory_get(addr)
         } else if (0xFF00..=0xFFFF).contains(&addr) {
             // I/O Registers and HRAM and IE
+
+            // Unused IO Registers return 0xFF
+            if addr == 0xFF03
+                || (0xFF08..=0xFF0E).contains(&addr)
+                || addr == 0xFF15
+                || addr == 0xFF1F
+                || (0xFF27..=0xFF2F).contains(&addr)
+                || (0xFF4C..=0xFF4D).contains(&addr)
+                || (0xFF56..=0xFF67).contains(&addr)
+                || (0xFF71..=0xFF7F).contains(&addr)
+            {
+                println!("Unmapped Register @{:4x}", addr);
+                return 0xFF;
+            }
             self.io_regs_hram_ie[addr as usize - 0xFF00]
         } else {
             unreachable!();
         }
     }
     pub fn set_mem(&mut self, addr: u16, byte: u8) {
-        if (0x0000..=0x00FF).contains(&addr) && self.boot_rom_enable {
-            // Ignore Writes to Boot ROM
-        } else if (0x0000..=0x7FFF).contains(&addr) {
+        if (0x0000..=0x7FFF).contains(&addr) {
             // Cartridge ROM
             if let Some(mbc) = &mut self.mbc {
                 mbc.set_mem(addr, byte)
@@ -362,7 +375,7 @@ impl CPU {
             // I/O Registers and HRAM and IE
 
             // $FF50 - Set to non-zero to disable boot ROM
-            if addr == 0xFF50{
+            if addr == 0xFF50 {
                 self.boot_rom_enable = false;
             }
 
@@ -436,13 +449,13 @@ impl CPU {
 
         // Superduper hacked version of this
         // TCAGBD.pdf: 4.10:
-        if self.halted_flag
-            && (self.get_mem(0xFFFF) & self.get_mem(0xFF0F)) == 0
-            && self.get_mem(0xFF0F) != 0
-        {
-            self.halted_flag = false;
-            return;
-        }
+        // if self.halted_flag
+        //     && (self.get_mem(0xFFFF) & self.get_mem(0xFF0F)) == 0
+        //     && self.get_mem(0xFF0F) != 0
+        // {
+        //     self.halted_flag = false;
+        //     return;
+        // }
 
         let allowed_interrupts = self.get_mem(0xFFFF) & self.get_mem(0xFF0F);
         // println!("INTERRUPT! Allowed: {:08b}", self.get_mem(0xFFFF));
@@ -1338,6 +1351,7 @@ impl CPU {
             ControlInstruction::HALT => self.halted_flag = true,
             ControlInstruction::STOP => {
                 self.stopped_flag = true;
+                println!("STOPPED with IF={:08b}", self.get_mem(0xFF0F));
             }
             ControlInstruction::DI => self.interrupt_master_enable = false,
             ControlInstruction::EI => self.interrupt_master_enable = true,

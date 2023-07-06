@@ -1,4 +1,7 @@
-use std::{sync::{Arc, Mutex}, time::{Instant, Duration}};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use image::ImageBuffer;
 
@@ -86,7 +89,7 @@ impl GraphicsController {
         self.graphics_status[0x04] = current_scanline;
         // Only on new Scanline
         if current_scanline != self.last_scanline {
-            // println!("current_scanline: {}", current_scanline);
+            println!("current_scanline: {}", current_scanline);
             if current_scanline == self.graphics_status[0x05] {
                 // LY = LYC
                 self.graphics_status[0x01] |= 0b0000_0100;
@@ -101,11 +104,11 @@ impl GraphicsController {
             if current_scanline < 144 {
                 let now = Instant::now();
                 self.render_line(current_scanline);
-                if Instant::now() - now > Duration::from_millis(1){
+                if Instant::now() - now > Duration::from_millis(1) {
                     println!("line render took {:?}", Instant::now() - now);
                 }
-            } 
-            
+            }
+
             if current_scanline >= 144 && self.last_scanline < 144 {
                 // println!("VBLANK Requested");
                 req_vblank_interrupt_res = true;
@@ -323,7 +326,9 @@ impl GraphicsController {
                 let palette_number = (flags & 0b0001_0000) >> 4;
 
                 for pixel_x in 0..8 {
-                    if (pos_x as i16 + pixel_x as i16 - 8) >= 0 && (pos_x as i16 + pixel_x as i16 - 8) < 160{
+                    if (pos_x as i16 + pixel_x as i16 - 8) >= 0
+                        && (pos_x as i16 + pixel_x as i16 - 8) < 160
+                    {
                         let pos_x = pos_x + pixel_x - 8;
 
                         // Render Tile

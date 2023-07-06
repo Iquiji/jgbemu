@@ -17,6 +17,8 @@ use crate::{
     ui::UserInput,
 };
 
+use super::banking::{MemoryBankController, NoMBC};
+
 pub const BOOT_ROM_GB: [u8; 256] = [
     0x31, 0xfe, 0xff, 0xaf, 0x21, 0xff, 0x9f, 0x32, 0xcb, 0x7c, 0x20, 0xfb, 0x21, 0x26, 0xff, 0x0e,
     0x11, 0x3e, 0x80, 0x32, 0xe2, 0x0c, 0x3e, 0xf3, 0xe2, 0x32, 0x3e, 0x77, 0x77, 0x3e, 0xfc, 0xe0,
@@ -215,7 +217,9 @@ impl Registers {
     }
 }
 
-#[derive(Debug, Clone)]
+// trait MemoryBankControllerSized =
+
+#[derive(Debug)]
 pub struct CPU {
     pub cycle: u64,
     pub interrupt_master_enable: bool,
@@ -225,7 +229,13 @@ pub struct CPU {
     pub last_tima_increment_cycle: u64,
     pub last_div_increment_cycle: u64,
     pub reg: Registers,
-    pub mem: [u8; 65536],
+    /// Memory Bank Controller in Cartridge
+    pub mbc: Option<Box<dyn MemoryBankController>>,
+    /// WRAM: from C000 to DFFF
+    pub wram: [u8; 0x2000],
+    // ALL I/O Registers and HRAM and IE, some handeled by different Hardware, like PPU
+    pub io_regs_hram_ie: [u8; 0x100],
+    pub boot_rom_enable: bool,
     pub graphics_controller: GraphicsController,
 }
 
@@ -239,119 +249,124 @@ impl CPU {
             last_tima_increment_cycle: 0,
             last_div_increment_cycle: 0,
             reg: Registers::default(),
-            mem: [0; 65536],
+            wram: [0; 0x2000],
+            mbc: None,
+            io_regs_hram_ie: [0; 0x100],
+            boot_rom_enable: true,
             graphics_controller: GraphicsController::new(screen_buffer),
         }
     }
 }
 
 impl CPU {
-    pub fn load_boot_rom(&mut self) {
-        for (i, byte) in BOOT_ROM_GB.iter().enumerate() {
-            self.mem[i] = *byte;
-        }
-        if self.mem[0x0147] != 0 {
-            error!("Cartridge Mapper Type unsuported... running regardless:");
-        }
-    }
-    pub fn load_blargg_test_rom(&mut self, path: &str) {
+    pub fn load_rom_from_disk(&mut self, path: &str) {
         let mut f = File::open(path).unwrap();
         let mut buf: Vec<u8> = vec![];
         let _num_bytes = f.read_to_end(&mut buf).unwrap();
-        // eprintln!("{:?}", num_bytes);
-        for (idx, byte) in buf.iter().enumerate().skip(256) {
-            // println!("Byte {:04x} = {:02x}", idx as u16, *byte);
-            self.mem[idx] = *byte;
-        }
-        // panic!()
-    }
-    pub fn unload_boot_rom(&mut self, path: &str) {
-        let mut f = File::open(path).unwrap();
-        let mut buf: Vec<u8> = vec![];
-        let _num_bytes = f.read_to_end(&mut buf).unwrap();
-        // eprintln!("{:?}", num_bytes);
-        for (idx, byte) in buf.iter().enumerate() {
-            // println!("Byte {:04x} = {:02x}", idx as u16, *byte);
-            self.mem[idx] = *byte;
-            if idx > 256 {
-                break;
-            }
-        }
-    }
-    pub fn run_till_0x100(&mut self) {
-        while self.reg.get_pc() != 0x100 {
-            self.handle_interrupts();
-            self.handle_timer();
-            let next_instr: Instruction = self.next_instr();
-            self.execute_instr(next_instr.clone());
-            let (vblank_irq, stat_irq) = self.graphics_controller.tick(self.cycle);
-            if stat_irq {
-                self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0000_0010);
-            };
-            if vblank_irq {
-                self.set_mem(0xFF0F, self.get_mem(0xFF0F) | 0b0000_0001);
-            }
-        }
-        assert_eq!(self.reg.get_reg_a(), 0x01);
-        assert_eq!(self.reg.get_reg_b(), 0x00);
-        assert_eq!(self.reg.get_reg_c(), 0x13);
-        assert_eq!(self.reg.get_reg_d(), 0x00);
-        assert_eq!(self.reg.get_reg_e(), 0xd8);
-        assert_eq!(self.reg.get_reg_h(), 0x01);
-        assert_eq!(self.reg.get_reg_l(), 0x4d);
-        assert_eq!(self.reg.get_stack_pointer(), 0xFFFE);
-        assert!(self.reg.get_status_zero());
-        assert!(!self.reg.get_status_negative());
+
+        let mbc_type: u8 = buf[0x147];
+        let mbc: Box<dyn MemoryBankController> = match mbc_type {
+            0 => Box::new(NoMBC::load_rom(path)),
+            // TODO:
+            1 => Box::new(NoMBC::load_rom(path)),
+            _ => todo!(),
+        };
+        self.mbc = Some(mbc);
     }
     pub fn get_mem(&self, addr: u16) -> u8 {
-        if (0xFF40..=0xFF4B).contains(&addr)
-            || (0x8000..=0x9FFF).contains(&addr)
-            || (0xFE00..=0xFE9F).contains(&addr)
-        {
+        if (0x0000..=0x00FF).contains(&addr) && self.boot_rom_enable {
+            BOOT_ROM_GB[addr as usize]
+        } else if (0x0000..=0x7FFF).contains(&addr) {
+            // Cartridge ROM
+            if let Some(mbc) = &self.mbc {
+                mbc.get_mem(addr)
+            } else {
+                unreachable!();
+            }
+        } else if (0x8000..=0x9FFF).contains(&addr) {
+            // VRAM
             self.graphics_controller.memory_get(addr)
+        } else if (0xA000..=0xBFFF).contains(&addr) {
+            // External RAM
+            if let Some(mbc) = &self.mbc {
+                mbc.get_mem(addr)
+            } else {
+                unreachable!();
+            }
+        } else if (0xC000..=0xDFFF).contains(&addr) {
+            // Internal WRAM
+            self.wram[addr as usize - 0xC000]
+        } else if (0xE000..=0xFDFF).contains(&addr) {
+            // ECHO of Internal WRAM
+            self.wram[addr as usize - 0xE000]
+        } else if (0xFE00..=0xFE9F).contains(&addr) {
+            // OAM Memory
+            self.graphics_controller.memory_get(addr)
+        } else if (0xFEA0..=0xFEFF).contains(&addr) {
+            // FEA0-FEFF Not Usable, Nintendo says use of this area is prohibited
+            0xFF
+        } else if (0xFF40..=0xFF4B).contains(&addr) {
+            self.graphics_controller.memory_get(addr)
+        } else if (0xFF00..=0xFFFF).contains(&addr) {
+            // I/O Registers and HRAM and IE
+            self.io_regs_hram_ie[addr as usize - 0xFF00]
         } else {
-            self.mem[addr as usize]
+            unreachable!();
         }
     }
     pub fn set_mem(&mut self, addr: u16, byte: u8) {
-        // if addr > 0xDD00 && addr < 0xDD05{
-        //     println!("[{:04x}] = {:02x}", addr, byte);
-        // }
-        // if 0xdd04 >= addr && addr >= 0xdd00{
-        //     println!("!!!! {:#04x}={:02x}", addr, byte);
-        // }
-        // if addr == 0xdd02{
-        //     println!("!!!! 0xdd02={:02x}", byte);
-        // }
-        // OAM DMA Transfer
-        if addr == 0xFF46 {
-            // println!("OAM DMA Transfer from {:04x}", (byte as u16) << 8);
-            for i in 0_u16..0x100 {
-                let src = ((byte as u16) << 8) + i;
-                let dst = 0xFE00 + i;
-                self.set_mem(dst, self.get_mem(src));
+        if (0x0000..=0x00FF).contains(&addr) && self.boot_rom_enable {
+            // Ignore
+            return;
+        } else if (0x0000..=0x7FFF).contains(&addr) {
+            // Cartridge ROM
+            if let Some(mbc) = &mut self.mbc {
+                mbc.set_mem(addr, byte)
+            } else {
+                unreachable!();
+            }
+        } else if (0x8000..=0x9FFF).contains(&addr) {
+            // VRAM
+            self.graphics_controller.memory_set(addr, byte);
+        } else if (0xA000..=0xBFFF).contains(&addr) {
+            // External RAM
+            if let Some(mbc) = &mut self.mbc {
+                mbc.set_mem(addr, byte);
+            } else {
+                unreachable!();
+            }
+        } else if (0xC000..=0xDFFF).contains(&addr) {
+            // Internal WRAM
+            self.wram[addr as usize - 0xC000] = byte;
+        } else if (0xE000..=0xFDFF).contains(&addr) {
+            // ECHO of Internal WRAM
+            self.wram[addr as usize - 0xE000] = byte;
+        } else if (0xFE00..=0xFE9F).contains(&addr) {
+            // OAM Memory
+            self.graphics_controller.memory_set(addr, byte);
+        } else if (0xFEA0..=0xFEFF).contains(&addr) {
+            // FEA0-FEFF Not Usable, Nintendo says use of this area is prohibited
+            return;
+        } else if (0xFF40..=0xFF4B).contains(&addr) {
+            self.graphics_controller.memory_set(addr, byte);
+        } else if (0xFF00..=0xFFFF).contains(&addr) {
+            // I/O Registers and HRAM and IE
+
+            // OAM DMA Transfer
+            if addr == 0xFF46 {
+                // println!("OAM DMA Transfer from {:04x}", (byte as u16) << 8);
+                for i in 0_u16..0x100 {
+                    let src = ((byte as u16) << 8) + i;
+                    let dst = 0xFE00 + i;
+                    self.set_mem(dst, self.get_mem(src));
+                }
+
+                return;
             }
 
-            return;
-        }
-
-        // Ignore writes to ROM
-        if (0x0000..=0x7FFF).contains(&addr) {
-            println!("INVALID WRITE TO ROM in ADDR: {:04x}", addr);
-            return;
-        }
-
-        // if (0xFFB6..=0xFFBF).contains(&addr) {
-        //     println!("WRITING {:02x} TO {:04x}", byte, addr)
-        // }
-
-        if (0xFF40..=0xFF4B).contains(&addr)
-            || (0x8000..=0x9FFF).contains(&addr)
-            || (0xFE00..=0xFE9F).contains(&addr)
-        {
-            self.graphics_controller.memory_set(addr, byte)
+            self.io_regs_hram_ie[addr as usize - 0xFF00] = byte;
         } else {
-            self.mem[addr as usize] = byte;
+            unreachable!();
         }
     }
     pub fn get_loc8(&self, loc: Location8Bit) -> u8 {
@@ -551,13 +566,17 @@ impl CPU {
             };
         }
 
-        match Instruction::parse_from_bytes(
-            &self.mem[(self.reg.get_pc() as usize)..(self.reg.get_pc() as usize + 1)],
-        ) {
+        let mut buf = [0_u8; 1];
+        for i in 0..buf.len() {
+            buf[i] = self.get_mem(self.reg.get_pc() + i as u16);
+        }
+        match Instruction::parse_from_bytes(&buf) {
             PRes::NeedMoreBytes => {
-                let instr_res = Instruction::parse_from_bytes(
-                    &self.mem[(self.reg.get_pc()) as usize..(self.reg.get_pc() + 1 + 1) as usize],
-                );
+                let mut buf = [0_u8; 2];
+                for i in 0..buf.len() {
+                    buf[i] = self.get_mem(self.reg.get_pc() + i as u16);
+                }
+                let instr_res = Instruction::parse_from_bytes(&buf);
                 match instr_res {
                     PRes::Instruction(instr) => {
                         // println!(
@@ -572,10 +591,11 @@ impl CPU {
                 }
             }
             PRes::NeedMoreBytesSpecific(n_bytes) => {
-                let instr_res = Instruction::parse_from_bytes(
-                    &self.mem[(self.reg.get_pc()) as usize
-                        ..(self.reg.get_pc() + n_bytes as u16 + 1) as usize],
-                );
+                let mut buf = vec![0_u8; n_bytes as usize + 1];
+                for i in 0..buf.len() {
+                    buf[i] = self.get_mem(self.reg.get_pc() + i as u16);
+                }
+                let instr_res = Instruction::parse_from_bytes(&buf);
                 match instr_res {
                     PRes::Instruction(instr) => {
                         // println!(

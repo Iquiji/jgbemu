@@ -4,6 +4,7 @@ use crate::ui::UserInput;
 
 use self::{cpu::CPU, instr::Instruction};
 
+pub mod banking;
 pub mod cpu;
 pub mod graphics;
 pub mod instr;
@@ -27,10 +28,7 @@ impl GameBoyEmulatorRuntime {
     }
 
     pub fn init(&mut self, path: &str) {
-        self.cpu.load_blargg_test_rom(path);
-        self.cpu.load_boot_rom();
-        self.cpu.run_till_0x100();
-        self.cpu.unload_boot_rom(path);
+        self.cpu.load_rom_from_disk(path);
     }
 
     pub fn run_tick(&mut self) {
@@ -40,7 +38,7 @@ impl GameBoyEmulatorRuntime {
             self.cpu.handle_interrupts();
             self.cpu.handle_timer();
             let next_instr: Instruction = self.cpu.next_instr();
-            self.cpu.execute_instr(next_instr);
+            self.cpu.execute_instr(next_instr.clone());
 
             let (vblank_irq, stat_irq) = self.cpu.graphics_controller.tick(self.cpu.cycle);
             if stat_irq {
@@ -52,8 +50,8 @@ impl GameBoyEmulatorRuntime {
                     .set_mem(0xFF0F, self.cpu.get_mem(0xFF0F) | 0b0000_0001);
             }
 
-            // println!("{:?}", next_instr.itype);
-            // println!(" + {}", self.cpu.print_status());
+            println!("{:?}", next_instr.itype);
+            println!(" + {}", self.cpu.print_status());
         } else {
             println!("STOPPED!");
         }

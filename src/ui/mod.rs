@@ -57,7 +57,7 @@ pub fn run_ui(rom: &str) -> Result<(), Box<dyn std::error::Error>> {
         let one_cycle_time = Duration::from_secs(1) / 4_194_304;
 
         loop {
-            for _ in 0..100{
+            for _ in 0..100 {
                 runtime.run_tick();
             }
             let current_cycle: u64 = runtime.cpu.cycle;
@@ -71,11 +71,14 @@ pub fn run_ui(rom: &str) -> Result<(), Box<dyn std::error::Error>> {
             last_cycle = current_cycle;
             last_time = new_time;
 
-            if expected_time > delta_time && expected_time - delta_time > Duration::from_micros(40) {
+            if expected_time > delta_time && expected_time - delta_time > Duration::from_micros(40)
+            {
                 sleep(expected_time - delta_time);
                 // println!("expected_time: {:?}, delta_time: {:?}, diff: {:?}",expected_time, delta_time, expected_time - delta_time);
                 // println!("{:?} Ahead of Target Framerate", expected_time - delta_time);
-            } else if expected_time < delta_time && delta_time - expected_time > Duration::from_micros(400) {
+            } else if expected_time < delta_time
+                && delta_time - expected_time > Duration::from_micros(400)
+            {
                 println!("{:?} Behind Target Framerate", delta_time - expected_time);
             }
         }

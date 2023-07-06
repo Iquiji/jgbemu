@@ -346,10 +346,6 @@ impl CPU {
         } else if (0xFEA0..=0xFEFF).contains(&addr) {
             // FEA0-FEFF Not Usable, Nintendo says use of this area is prohibited
         } else if (0xFF40..=0xFF4B).contains(&addr) {
-            self.graphics_controller.memory_set(addr, byte);
-        } else if (0xFF00..=0xFFFF).contains(&addr) {
-            // I/O Registers and HRAM and IE
-
             // OAM DMA Transfer
             if addr == 0xFF46 {
                 // println!("OAM DMA Transfer from {:04x}", (byte as u16) << 8);
@@ -361,6 +357,10 @@ impl CPU {
 
                 return;
             }
+            self.graphics_controller.memory_set(addr, byte);
+        } else if (0xFF00..=0xFFFF).contains(&addr) {
+            // I/O Registers and HRAM and IE
+
             // $FF50 - Set to non-zero to disable boot ROM
             if addr == 0xFF50{
                 self.boot_rom_enable = false;

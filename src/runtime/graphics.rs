@@ -400,9 +400,7 @@ impl GraphicsController {
                     }
                 }
             }
-        } else {
-            println!("Objects disabled!");
-        }
+        } 
     }
 
     // pub fn get_screen_buffer.lock().unwrap()(&self) -> [[u8; 160]; 144]{

@@ -89,7 +89,7 @@ impl GraphicsController {
         self.graphics_status[0x04] = current_scanline;
         // Only on new Scanline
         if current_scanline != self.last_scanline {
-            println!("current_scanline: {}", current_scanline);
+            // println!("current_scanline: {}", current_scanline);
             if current_scanline == self.graphics_status[0x05] {
                 // LY = LYC
                 self.graphics_status[0x01] |= 0b0000_0100;
@@ -102,11 +102,7 @@ impl GraphicsController {
             }
 
             if current_scanline < 144 {
-                let now = Instant::now();
                 self.render_line(current_scanline);
-                if Instant::now() - now > Duration::from_millis(1) {
-                    println!("line render took {:?}", Instant::now() - now);
-                }
             }
 
             if current_scanline >= 144 && self.last_scanline < 144 {
@@ -404,6 +400,8 @@ impl GraphicsController {
                     }
                 }
             }
+        } else {
+            println!("Objects disabled!");
         }
     }
 

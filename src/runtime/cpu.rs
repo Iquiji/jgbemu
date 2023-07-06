@@ -316,8 +316,7 @@ impl CPU {
     }
     pub fn set_mem(&mut self, addr: u16, byte: u8) {
         if (0x0000..=0x00FF).contains(&addr) && self.boot_rom_enable {
-            // Ignore
-            return;
+            // Ignore Writes to Boot ROM
         } else if (0x0000..=0x7FFF).contains(&addr) {
             // Cartridge ROM
             if let Some(mbc) = &mut self.mbc {
@@ -346,7 +345,6 @@ impl CPU {
             self.graphics_controller.memory_set(addr, byte);
         } else if (0xFEA0..=0xFEFF).contains(&addr) {
             // FEA0-FEFF Not Usable, Nintendo says use of this area is prohibited
-            return;
         } else if (0xFF40..=0xFF4B).contains(&addr) {
             self.graphics_controller.memory_set(addr, byte);
         } else if (0xFF00..=0xFFFF).contains(&addr) {
@@ -355,13 +353,17 @@ impl CPU {
             // OAM DMA Transfer
             if addr == 0xFF46 {
                 // println!("OAM DMA Transfer from {:04x}", (byte as u16) << 8);
-                for i in 0_u16..0x100 {
+                for i in 0_u16..=0x9F {
                     let src = ((byte as u16) << 8) + i;
                     let dst = 0xFE00 + i;
                     self.set_mem(dst, self.get_mem(src));
                 }
 
                 return;
+            }
+            // $FF50 - Set to non-zero to disable boot ROM
+            if addr == 0xFF50{
+                self.boot_rom_enable = false;
             }
 
             self.io_regs_hram_ie[addr as usize - 0xFF00] = byte;
@@ -493,7 +495,6 @@ impl CPU {
         }
     }
     pub fn handle_timer(&mut self) {
-        // TODO:
         let timer_modulo = self.get_mem(0xFF06);
         let timer_control = self.get_mem(0xFF07);
         let timer_enable_flag = (timer_control & 0b0000_0100) == 0b0000_0100;

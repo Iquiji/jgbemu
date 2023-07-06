@@ -37,6 +37,5 @@ impl MemoryBankController for NoMBC{
     fn set_mem(&mut self, addr: u16, _data: u8) {
         // ignore, we are a ROM
         println!("Invalid Write to NoMBC ROM with addr: {:04x}", addr);
-        return;
     }
 }

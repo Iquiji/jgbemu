@@ -38,7 +38,7 @@ impl GameBoyEmulatorRuntime {
             self.cpu.handle_interrupts();
             self.cpu.handle_timer();
             let next_instr: Instruction = self.cpu.next_instr();
-            self.cpu.execute_instr(next_instr.clone());
+            self.cpu.execute_instr(next_instr);
 
             let (vblank_irq, stat_irq) = self.cpu.graphics_controller.tick(self.cpu.cycle);
             if stat_irq {
@@ -50,8 +50,8 @@ impl GameBoyEmulatorRuntime {
                     .set_mem(0xFF0F, self.cpu.get_mem(0xFF0F) | 0b0000_0001);
             }
 
-            println!("{:?}", next_instr.itype);
-            println!(" + {}", self.cpu.print_status());
+            // println!("{:?}", next_instr.itype);
+            // println!(" + {}", self.cpu.print_status());
         } else {
             println!("STOPPED!");
         }
